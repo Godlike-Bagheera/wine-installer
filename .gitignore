@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.tar.gz
+debug-report/
+wine-portable/
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
