@@ -2,19 +2,18 @@
 import os
 import sys
 import subprocess
-import time
 from pathlib import Path
 from modules import state, debug
 from modules.colors import (
     ok, info, warn, err, hint, sep,
-    CYAN, BOLD, DIM, GREEN, YELLOW, RED, BLUE, RESET,
+    CYAN, BOLD, GREEN, YELLOW, BLUE, RESET,
 )
 from modules.config import (
     HOME, WINE_BIN, WINE_PREFIX, DXVK_DIR, WINETRICKS_BIN, ARIA2C_BIN,
-    DEBUG_LOG, EXPECTED_COMMANDS, LOG_DIR, CURRENT_VERSION,
+    DEBUG_LOG, EXPECTED_COMMANDS, CURRENT_VERSION,
 )
 from modules.settings import (
-    load_history, save_history, update_history, show_history_menu,
+    load_history, show_history_menu,
     load_settings, save_settings, apply_settings,
 )
 from modules.launcher import launch, find_exe
@@ -327,7 +326,7 @@ def main():
     print_art(CYAN)
     print(f"{BLUE}╔══════════════════════════════════════════════════╗")
     print(f"║  Wine Installer + Game Launcher  v{CURRENT_VERSION}            ║")
-    print(f"║  Wine + DXVK + Minecraft + Debug + JDK           ║")
+    print("║  Wine + DXVK + Minecraft + Debug + JDK           ║")
     print(f"╚══════════════════════════════════════════════════╝{RESET}\n")
 
     # Ротация старых логов
@@ -422,8 +421,13 @@ def check_disk_space():
 
 
 def ensure_bin_tools():
-    has_wt = WINETRICKS_BIN.exists() and WINETRICKS_BIN.stat().st_size > 100 * 1024
-    has_ar = ARIA2C_BIN.exists() and ARIA2C_BIN.stat().st_size > 500 * 1024
+    try:
+        has_wt = WINETRICKS_BIN.exists() and WINETRICKS_BIN.stat().st_size > 100 * 1024
+        has_ar = ARIA2C_BIN.exists() and ARIA2C_BIN.stat().st_size > 500 * 1024
+    except OSError as e:
+        debug.dbg_exc(e, "ensure_bin_tools/stat")
+        warn(f"Не могу проверить утилиты ({e}) — пропускаю автозагрузку")
+        return
     if not has_wt or not has_ar:
         info(f"{BOLD}Проверка утилит...{RESET}")
         if not has_wt:

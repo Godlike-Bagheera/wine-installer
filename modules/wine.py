@@ -1,10 +1,8 @@
 """Wine AppImage, DXVK, runexe."""
-import os
 import shutil
 import tarfile
-import subprocess
 from modules import debug
-from modules.colors import ok, info, warn, err, hint, CYAN, RESET
+from modules.colors import ok, info, CYAN, RESET
 from modules.config import (
     WINE_DIR, WINE_BIN, RUNEXE, DXVK_DIR, DXVK_VERSIONS, DXVK_OVERRIDES,
     WINE_MIRRORS, WINE_PREFIX, make_dxvk_mirrors,
@@ -132,7 +130,6 @@ def cmd_dxvk():
 
 def cmd_update():
     from modules.colors import MAGENTA
-    from modules.prefix import ensure_prefix
     info("Обновление Wine/DXVK")
     try:
         answer = input(f"{MAGENTA}Перекачать? [y/N]: {RESET}").strip().lower()

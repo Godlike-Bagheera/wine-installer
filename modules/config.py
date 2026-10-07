@@ -1,8 +1,33 @@
 """Все константы и пути. Никакой логики — только данные."""
+import os
 from pathlib import Path
 
+
 # ---------- ПУТИ ----------
-HOME = Path.home()
+
+
+def _resolve_home():
+    """Определяет домашнюю папку надёжным способом.
+
+    Path.home() берёт переменную окружения HOME, которая может указывать
+    на несуществующий путь (например, /nonexistent у системных пользователей).
+    Сначала пробуем HOME из окружения, затем passwd-запись пользователя —
+    в ход идёт только реально существующая директория.
+    """
+    env_home = Path.home()
+    if env_home.is_dir():
+        return env_home
+    try:
+        import pwd
+        pw_dir = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if pw_dir.is_dir():
+            return pw_dir
+    except Exception:
+        pass
+    return env_home
+
+
+HOME = _resolve_home()
 WINE_DIR = HOME / "wine-portable"
 LOG_DIR = WINE_DIR / "logs"
 DEBUG_LOG = LOG_DIR / "debug.log"
@@ -167,7 +192,11 @@ LEGACY_URL = LEGACY_MIRRORS[0][1]
 # Legacy Launcher Portable (.jar) — автоскачивание.
 # ─────────────────────────────────────────────────────────────
 LEGACY_JAR_MIRRORS = [
-    ("legacylauncher.ru (официальный)", "https://go.legacylauncher.ru/jar"),
+    # Официальная прямая ссылка скачивания с сайта Legacy Launcher
+    # (отдаёт Portable .jar, поддерживает Range — можно докачивать).
+    ("dl.legacylauncher.ru (официальный installer)",
+     "https://dl.legacylauncher.ru/legacy/installer"),
+    ("go.legacylauncher.ru (официальный)", "https://go.legacylauncher.ru/jar"),
     ("llaun.ch (официальный)",           "https://llaun.ch/jar"),
     ("dl.llaun.ch (прямой)",             "https://dl.llaun.ch/legacy/bootstrap"),
     ("lln4.cc",                          "https://lln4.cc/jar"),

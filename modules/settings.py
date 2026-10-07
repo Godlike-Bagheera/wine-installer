@@ -97,7 +97,6 @@ def show_history_menu():
     print(f"{BOLD}История запусков:{RESET}")
     for i, g in enumerate(games, 1):
         p = Path(g["path"])
-        count = g.get("count", 1)
         last = g.get("last", 0)
         status = g.get("status", "unknown")
         total_sec = g.get("total_seconds", 0)
