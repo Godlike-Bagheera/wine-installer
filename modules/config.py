@@ -1,8 +1,33 @@
 """Все константы и пути. Никакой логики — только данные."""
+import os
 from pathlib import Path
 
+
 # ---------- ПУТИ ----------
-HOME = Path.home()
+
+
+def _resolve_home():
+    """Определяет домашнюю папку надёжным способом.
+
+    Path.home() берёт переменную окружения HOME, которая может указывать
+    на несуществующий путь (например, /nonexistent у системных пользователей).
+    Сначала пробуем HOME из окружения, затем passwd-запись пользователя —
+    в ход идёт только реально существующая директория.
+    """
+    env_home = Path.home()
+    if env_home.is_dir():
+        return env_home
+    try:
+        import pwd
+        pw_dir = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        if pw_dir.is_dir():
+            return pw_dir
+    except Exception:
+        pass
+    return env_home
+
+
+HOME = _resolve_home()
 WINE_DIR = HOME / "wine-portable"
 LOG_DIR = WINE_DIR / "logs"
 DEBUG_LOG = LOG_DIR / "debug.log"

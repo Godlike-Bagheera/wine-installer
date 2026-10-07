@@ -13,10 +13,36 @@ DIM = "\033[2m"
 RESET = "\033[0m"
 
 
-def ok(msg):     print(f"{GREEN}[✓]{RESET} {msg}"); debug.dbg(msg, "OK")
-def info(msg):   print(f"{BLUE}[i]{RESET} {msg}"); debug.dbg(msg)
-def warn(msg):   print(f"{YELLOW}[!]{RESET} {msg}"); debug.dbg(msg, "WARN")
-def err(msg):    print(f"{RED}[✗]{RESET} {msg}"); debug.dbg(msg, "ERR")
-def hint(msg):   print(f"{CYAN}[→]{RESET} {msg}"); debug.dbg(msg, "HINT")
-def fix(msg):    print(f"{MAGENTA}[⚙]{RESET} {msg}"); debug.dbg(msg, "FIX")
-def sep():       print(f"{BLUE}{'─' * 50}{RESET}"); debug.dbg("---")
+def ok(msg):
+    print(f"{GREEN}[✓]{RESET} {msg}")
+    debug.dbg(msg, "OK")
+
+
+def info(msg):
+    print(f"{BLUE}[i]{RESET} {msg}")
+    debug.dbg(msg)
+
+
+def warn(msg):
+    print(f"{YELLOW}[!]{RESET} {msg}")
+    debug.dbg(msg, "WARN")
+
+
+def err(msg):
+    print(f"{RED}[✗]{RESET} {msg}")
+    debug.dbg(msg, "ERR")
+
+
+def hint(msg):
+    print(f"{CYAN}[→]{RESET} {msg}")
+    debug.dbg(msg, "HINT")
+
+
+def fix(msg):
+    print(f"{MAGENTA}[⚙]{RESET} {msg}")
+    debug.dbg(msg, "FIX")
+
+
+def sep():
+    print(f"{BLUE}{'─' * 50}{RESET}")
+    debug.dbg("---")

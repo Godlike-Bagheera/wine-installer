@@ -17,11 +17,10 @@ from modules.config import (
     HISTORY_FILE, GAMES_DIR, DESKTOP_DIRS, SHORTCUTS_DIR,
     DXVK_OVERRIDES, FREE_GAMES, CURRENT_VERSION,
 )
-from modules.prefix import get_wine_env, ensure_prefix
+from modules.prefix import get_wine_env
 from modules.wine import install_dxvk_to_wine
-from modules.winetricks import install_via_winetricks
-from modules.gamemode import cmd_gamemode, gamemode_available
-from modules.java import find_java, cmd_install_java
+from modules.gamemode import gamemode_available
+from modules.java import find_java
 from modules.launcher import find_exe
 from modules.settings import (
     load_settings, save_settings, apply_settings,
@@ -59,7 +58,7 @@ def cmd_debug(args):
     print(f"  Дебаг: {'включён' if state.DEBUG_MODE else 'выключен'}")
     if DEBUG_LOG.exists():
         print(f"  debug.log: {DEBUG_LOG.stat().st_size//1024} КБ")
-    print(f"  Флаг: --debug")
+    print("  Флаг: --debug")
     print()
 
 

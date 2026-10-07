@@ -12,15 +12,15 @@ from pathlib import Path
 from modules import debug
 from modules.colors import ok, info, warn, err, hint, CYAN, YELLOW, MAGENTA, BOLD, RESET
 from modules.config import (
-    WINE_DIR, PRISM_DIR, PRISM_URL, WINE_BIN, WINE_PREFIX,
+    WINE_DIR, PRISM_DIR, PRISM_URL, WINE_PREFIX,
     MODRINTH_FO_API, OPTIFINE_PAGE, FABRIC_META, FABRIC_MAVEN,
-    LEGACY_MIRRORS, LEGACY_JAR_MIRRORS, LEGACY_JAR_MIN_SIZE,
+    LEGACY_JAR_MIRRORS, LEGACY_JAR_MIN_SIZE,
     SYSTEM_TRUSTSTORE_PATHS, SYSTEM_TRUSTSTORE_PASSWORD,
 )
 from modules.download import download_file
 from modules.hash_utils import verify_sha512, copy_to_clipboard
 from modules.java import find_java, install_portable_java, cmd_install_java
-from modules.prefix import get_minecraft_game_path, ensure_prefix, get_wine_env
+from modules.prefix import get_minecraft_game_path
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -212,32 +212,53 @@ def setup_legacy_portable():
         ok(f"SSL truststore: {truststore}")
     print()
 
-    # 6. Запуск
-    info("Запускаю Legacy Launcher Portable...")
-    hint("Закрой окно лаунчера КРЕСТИКОМ когда закончишь")
+    # 6. Запуск (несколько попыток — bootstrap-джары иногда падают с кодом 1
+    #    при сетевом сбое на первой загрузке)
+    MAX_LAUNCH_ATTEMPTS = 2
+    rc = None
+    for attempt in range(1, MAX_LAUNCH_ATTEMPTS + 1):
+        info(f"Запускаю Legacy Launcher Portable... (попытка {attempt})")
+        hint("Закрой окно лаунчера КРЕСТИКОМ когда закончишь")
+        print()
+        try:
+            r = subprocess.run(
+                [java_bin, "-jar", str(jar_path)],
+                env=env, check=False,
+            )
+            rc = r.returncode
+        except FileNotFoundError:
+            debug.dbg(f"java_bin не найден: {java_bin}", "ERR")
+            err(f"Путь к Java больше не существует: {java_bin}")
+            hint("Проверь install-java или удали ~/java и поставь заново")
+            return False
+        except Exception as e:
+            debug.dbg_exc(e, "setup_legacy_portable/run")
+            err(f"Не запустить: {e}")
+            return False
+
+        if rc == 0:
+            ok("Legacy Launcher завершён")
+            return True
+
+        warn(f"Java завершилась с кодом {rc}")
+        if attempt < MAX_LAUNCH_ATTEMPTS:
+            try:
+                again = input(f"{YELLOW}Попробовать ещё раз? [Y/n]: {RESET}").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                print()
+                break
+            if again not in ("", "y", "yes", "д", "да"):
+                break
+
     print()
-    try:
-        r = subprocess.run(
-            [java_bin, "-jar", str(jar_path)],
-            env=env, check=False,
-        )
-    except Exception as e:
-        debug.dbg_exc(e, "setup_legacy_portable/run")
-        err(f"Не запустить: {e}")
-        return False
-    if r.returncode != 0:
-        warn(f"Java завершилась с кодом {r.returncode}")
-        print()
-        info("Если в логе выше 'PKIX path building failed':")
-        hint("Сертификаты Минцифры не попали в Java-truststore.")
-        hint("Проверь: ls -la /etc/pki/ca-trust/extracted/java/cacerts")
-        hint("Если файла нет: sudo update-ca-trust")
-        hint("Если файл есть, но пустой: поставь CA Минцифры (см. README)")
-        hint("Альтернатива: используй Prism Launcher (команда `prism`)")
-        print()
-    else:
-        ok("Legacy Launcher завершён")
-    return True
+    info("Если в логе выше 'PKIX path building failed':")
+    hint("Сертификаты Минцифры не попали в Java-truststore.")
+    hint("Проверь: ls -la /etc/pki/ca-trust/extracted/java/cacerts")
+    hint("Если файла нет: sudo update-ca-trust")
+    hint("Если файл есть, но пустой: поставь CA Минцифры (см. README)")
+    hint("Альтернатива: используй Prism Launcher (команда `prism`)")
+    print()
+    return False
 
 
 def setup_legacy():
@@ -246,9 +267,33 @@ def setup_legacy():
     .exe-установщик на Wine 11 стабильно падает с page fault в WOW64
     (баг Wine, не наш). Если .exe-версии в префиксе нет — сразу идём в
     Portable .jar, не тратя время на скачивание и запуск установщика.
+
+    Перед скачиванием проверяем окружение: без Java portable-вариант
+    физически не запустится, поэтому предупреждаем сразу и предлагаем
+    установить JDK — а не роняем скрипт ошибкой в момент запуска.
     """
     info(f"{BOLD}Legacy Launcher{RESET}")
 
+    # 0. Окружение: Legacy Portable = чистая Java. Без неё дальше идти смысла нет.
+    java_bin, java_home, java_status = find_java()
+    if not java_bin:
+        warn(f"Java: {java_status}. Legacy Launcher Portable работает на Java.")
+        try:
+            answer = input(f"{MAGENTA}Скачать портативную JDK 17 сейчас? [Y/n]: {RESET}").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return False
+        if answer in ("", "y", "yes", "д", "да"):
+            if not install_portable_java():
+                err("JDK установить не удалось — Legacy Launcher без Java не запустить.")
+                hint("Попробуй позже: install-java, затем снова legacy")
+                return False
+            java_bin, java_home, java_status = find_java()
+        else:
+            hint("Отменено. Установи Java командой install-java, затем повтори legacy")
+            return False
+
+    # 1. Уже установлен через .exe-установщик?
     found = _find_legacy_installed()
     if found:
         ok(f"Legacy Launcher уже установлен: {found}")

@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from modules import debug
-from modules.colors import ok, info, warn, err, hint, BOLD, RESET
+from modules.colors import info, warn, err, hint, BOLD, RESET
 from modules.config import (
     HOME, WINE_BIN, LOG_DIR, PRIORITY_DIRS, EXCLUDE_DIRS,
     SUPPORTED_EXT, MAX_RETRIES, OK_RUN_SECONDS, CRASH_SHOW_LOG_SECONDS,
@@ -29,7 +29,7 @@ def get_log_path(exe_path):
 
 
 def show_log(log_path, lines=40):
-    from modules.colors import DIM, CYAN
+    from modules.colors import DIM
     if not log_path.exists() or log_path.stat().st_size == 0:
         warn("Лог пустой.")
         return

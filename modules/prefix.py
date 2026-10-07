@@ -5,10 +5,10 @@ import time
 import subprocess
 from pathlib import Path
 from modules import debug
-from modules.colors import ok, info, warn, err, hint, BOLD, RESET
+from modules.colors import ok, info, err, BOLD, RESET
 from modules.config import (
     WINE_PREFIX, WINE_BIN, DXVK_DIR, DXVK_OVERRIDES,
-    WINE_DIR, PREFIXES_DIR, USE_PER_GAME_PREFIX,
+    PREFIXES_DIR, USE_PER_GAME_PREFIX,
     USE_DXVK_HUD, USE_MANGOHUD,
 )
 
@@ -85,8 +85,8 @@ def show_minecraft_paths():
     game_linux = get_minecraft_game_path()
     game_win = r"C:\users\stud\AppData\Roaming\.tlauncher\legacy\Minecraft\game"
     print(f"\n{BOLD}Пути Minecraft:{RESET}")
-    print(f"  Linux (для OptiFine через java):")
+    print("  Linux (для OptiFine через java):")
     print(f"    {CYAN}{game_linux}{RESET}")
-    print(f"  Windows (для .exe):")
+    print("  Windows (для .exe):")
     print(f"    {CYAN}{game_win}{RESET}")
     print()
