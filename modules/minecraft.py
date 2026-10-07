@@ -176,7 +176,7 @@ def setup_legacy_portable():
         else:
             # 3. Фоллбэк — ручной путь
             err("Не удалось скачать Portable .jar автоматически")
-            hint("Скачай вручную: https://llaun.ch/jar")
+            hint("Скачай вручную: https://dl.legacylauncher.ru/legacy/installer")
             hint(f"И положи в: {jar_dir}  (имя: LegacyLauncher.jar)")
             print()
             try:

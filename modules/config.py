@@ -192,7 +192,11 @@ LEGACY_URL = LEGACY_MIRRORS[0][1]
 # Legacy Launcher Portable (.jar) — автоскачивание.
 # ─────────────────────────────────────────────────────────────
 LEGACY_JAR_MIRRORS = [
-    ("legacylauncher.ru (официальный)", "https://go.legacylauncher.ru/jar"),
+    # Официальная прямая ссылка скачивания с сайта Legacy Launcher
+    # (отдаёт Portable .jar, поддерживает Range — можно докачивать).
+    ("dl.legacylauncher.ru (официальный installer)",
+     "https://dl.legacylauncher.ru/legacy/installer"),
+    ("go.legacylauncher.ru (официальный)", "https://go.legacylauncher.ru/jar"),
     ("llaun.ch (официальный)",           "https://llaun.ch/jar"),
     ("dl.llaun.ch (прямой)",             "https://dl.llaun.ch/legacy/bootstrap"),
     ("lln4.cc",                          "https://lln4.cc/jar"),
