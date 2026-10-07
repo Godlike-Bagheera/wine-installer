@@ -1,2 +1,43 @@
+# ---------- Python ----------
 __pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---------- Тесты / покрытие / линтеры ----------
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
 .ruff_cache/
+
+# ---------- Редакторы / IDE ----------
+.idea/
+.vscode/
+*.swp
+*~
+
+# ---------- ОС ----------
+.DS_Store
+Thumbs.db
+
+# ---------- Локальные артефакты скрипта (на случай запуска из репо) ----------
+wine-portable/
+games/
+prism/
+java/
+logs/
+*.log
+history.json
+settings.json
+.mirror_cache
+legacy-launcher.jar
+*.AppImage
+prefix/
+prefixes/
+
+# Секретов в репозитории быть не должно
+.env
