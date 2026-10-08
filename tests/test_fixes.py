@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Интеграционные проверки ключевых фиксов (без сети, локально)."""
-import sys, os, json, zipfile, tempfile, shutil
+import json
+import os
+import shutil
+import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
