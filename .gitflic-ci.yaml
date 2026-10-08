@@ -1,0 +1,17 @@
+stages:
+  - lint
+  - syntax
+
+image: python:3.11-slim
+
+lint:
+  stage: lint
+  script:
+    - pip install --quiet ruff
+    - ruff check .
+  allow_failure: false
+
+syntax:
+  stage: syntax
+  script:
+    - python -m compileall -q modules wine.py
