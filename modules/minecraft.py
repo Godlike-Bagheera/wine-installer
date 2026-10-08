@@ -6,9 +6,9 @@ import json
 import shutil
 import tarfile
 import zipfile
-import hashlib
 import subprocess
 import urllib.request
+import urllib.error
 from pathlib import Path
 from modules import debug
 from modules.colors import ok, info, warn, err, hint, CYAN, YELLOW, MAGENTA, BOLD, RESET
@@ -21,27 +21,81 @@ from modules.config import (
     FABRIC_META_API, MAVEN_FABRIC, MAVEN_CENTRAL,
 )
 from modules.download import download_file
-from modules.hash_utils import verify_sha512, copy_to_clipboard
+from modules.hash_utils import verify_sha512, verify_sha1, copy_to_clipboard
 from modules.java import find_java, install_portable_java, cmd_install_java
 from modules.prefix import choose_minecraft_dir
 
 
-def _http_get_json(url, timeout=30):
-    """GET url -> распарсенный JSON (SSL-контекст как в остальном проекте)."""
+def _ssl_ctx():
+    """Единый SSL-контекст проекта.
+
+    Red OS ставит корневые сертификаты Минцифры, которые не совпадают с
+    цепочками GitHub/Mojang — проверка сертификата ломает скачивание в
+    школьной сети. Отключаем verification осознанно и в ОДНОМ месте
+    (раньше такой же контекст копировался 6 раз по модулям).
+    """
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _http_get_json(url, timeout=30):
+    """GET url -> распарсенный JSON (SSL-контекст как в остальном проекте)."""
     req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.5"})
-    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+    with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 
+def _github_get_json(url, timeout=30):
+    """JSON c api.github.com + кэш по ETag (лимит API 60 запросов/час без токена).
+
+    Школа: несколько установок подряд могли упереться в лимит и получить
+    403 — теперь свежие ответы переиспользуются из кэша WINE_DIR.
+    """
+    from modules.config import CACHE_FILE
+    cache_path = Path(str(CACHE_FILE) + ".github.json")
+    cache = {}
+    try:
+        if cache_path.exists():
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        cache = {}
+    entry = cache.get(url, {})
+    headers = {"User-Agent": "wine-installer/2.5", "Accept": "application/vnd.github+json"}
+    if entry.get("etag"):
+        headers["If-None-Match"] = entry["etag"]
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8", errors="replace"))
+        etag = r.headers.get("ETag", "")
+        if etag:
+            cache[url] = {"etag": etag, "data": data}
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(cache), encoding="utf-8")
+            except Exception:
+                pass
+        return data
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and "data" in entry:      # не изменилось — отдаём кэш
+            debug.dbg(f"github cache 304: {url}")
+            return entry["data"]
+        if e.code == 403 and "data" in entry:      # лимит API — спасаемся кэшем
+            warn("GitHub API лимит исчерпан — использую кэшированный список релизов")
+            return entry["data"]
+        raise
+    except Exception:
+        if "data" in entry:                        # сеть лежит — берём кэш
+            warn("GitHub API недоступен — использую кэш")
+            return entry["data"]
+        raise
+
+
 def _sha1(path):
-    h = hashlib.sha1()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    ok_hash, actual = verify_sha1(path, "")
+    return actual or ""
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -414,13 +468,8 @@ def download_fabric_installer():
         _autofix_remove(dest)
     if dest.exists() and dest.stat().st_size > 100 * 1024:
         return dest
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     try:
-        req = urllib.request.Request(FABRIC_META, headers={"User-Agent": "wine-installer/2.5"})
-        with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
-            data = json.loads(r.read().decode())
+        data = _http_get_json(FABRIC_META, timeout=30)
         latest = data[0].get("version", "1.0.1")
     except Exception:
         latest = "1.0.1"
@@ -777,7 +826,7 @@ def _pick_fo_release():
     по имени тега (v14.1.0 годится, v15.0.0-alpha.5 / beta — нет).
     .zip-ассет ищется как запасной вариант (если .mrpack недоступен).
     """
-    releases = _http_get_json(f"{FO_GITHUB_API}?per_page=100", timeout=30)
+    releases = _github_get_json(f"{FO_GITHUB_API}?per_page=100", timeout=30)
     best = None
     for r in releases:
         if r.get("draft") or r.get("prerelease"):
@@ -858,14 +907,15 @@ def unpack_fo_zip_to_game(zip_path, game_dir, rel_version):
                 parts = str(manifest_json.get("manifestVersion", ""))
                 debug.dbg(f"manifest.json keys: {list(manifest_json.keys())}, mc={mc_version}, mf={parts}")
             for name in z.namelist():
-                if name.endswith("/") and "overrides/" in name:
-                    rel = name.split("overrides/", 1)[1]
-                    if not rel:
-                        continue
-                    target = game_dir / rel
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with z.open(name) as src, open(target, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
+                if "overrides/" not in name or name.endswith("/"):
+                    continue
+                rel = name.split("overrides/", 1)[1]
+                if not rel:
+                    continue
+                target = game_dir / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with z.open(name) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
             ok("Overrides из zip распакованы")
     except Exception as e:
         debug.dbg_exc(e, "unpack_fo_zip")
@@ -1009,12 +1059,9 @@ def _optifine_versions_from_html(html):
 
 def setup_optifine():
     info(f"{BOLD}Скачивание OptiFine{RESET}")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     try:
         req = urllib.request.Request(OPTIFINE_PAGE, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
+        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=30) as r:
             html = r.read().decode("utf-8", errors="replace")
     except Exception as e:
         debug.dbg_exc(e, "setup_optifine/page")

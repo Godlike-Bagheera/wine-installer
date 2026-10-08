@@ -241,12 +241,17 @@ MOJANG_RESOURCES = "https://resources.download.minecraft.net/"
 
 
 def make_github_mirrors(url):
-    """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей)."""
+    """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей).
+
+    Прокси умеют отдавать только ассеты github.com/.../releases/download/...;
+    для api.github.com и прочих URL возвращают пустой список — качаем прямо.
+    """
+    if "github.com" not in url or "/releases/download/" not in url:
+        return []
     return [
         ("ghfast.top",      f"https://ghfast.top/{url}"),
         ("ghproxy.net",     f"https://ghproxy.net/{url}"),
         ("gh-proxy.com",    f"https://gh-proxy.com/{url}"),
-        ("GitHub (прямой)", url),
     ]
 
 
@@ -269,6 +274,6 @@ FREE_GAMES = [
     ("Doom (shareware)",      "https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad"),
     ("OpenTTD (Windows)",     "https://cdn.openttd.org/openttd-releases/latest/openttd-windows.zip"),
     ("Wolfenstein 3D",        "https://distro.ibiblio.org/slitaz/sources/packages/w/wolf3d.zip"),
-    ("SuperTux (Windows)",    "https://github.com/SuperTux/supertux/releases/latest"),
+    ("SuperTux (Linux AppImage)", "https://github.com/SuperTux/supertux/releases/download/v0.6.3/SuperTux-v0.6.3-x86_64.AppImage"),
     ("Battle for Wesnoth",    "https://sourceforge.net/projects/wesnoth/files/latest/download"),
 ]
