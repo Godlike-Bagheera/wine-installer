@@ -5,6 +5,7 @@ import time
 import subprocess
 import urllib.request
 import urllib.error       # <-- добавляем для HTTPError
+from pathlib import Path
 from modules import state, debug
 from modules.colors import ok, info, warn, err, CYAN, RESET
 from modules.config import (
@@ -51,6 +52,34 @@ def get_aria2c_path():
         return str(ARIA2C_BIN)
     import shutil
     return shutil.which("aria2c")
+
+
+_BINARY_MAGICS = {
+    b"PK\x03\x04": (".jar", ".zip", ".mrpack"),   # zip-контейнеры
+    b"\x7fELF":    (),                              # бинарники (aria2c и т.п.)
+    b"\x1f\x8b":   (".gz", ".tgz"),                 # gzip / tar.gz
+}
+
+
+def _looks_binary(path):
+    """True, если файл для бинарного расширения начинается с корректной
+    сигнатуры (PK/ELF/gzip). Текстовые (.sh/.bat/.txt), .msi (OLE) и файлы
+    неизвестных расширений пропускаем — проверка только против HTML-заглушек."""
+    p = Path(path)
+    suffix = p.suffix.lower()
+    expected = None
+    for magic, exts in _BINARY_MAGICS.items():
+        if suffix in exts:
+            expected = magic
+            break
+    if expected is None:
+        return True
+    try:
+        with open(p, "rb") as f:
+            head = f.read(len(expected))
+        return head == expected
+    except Exception:
+        return False
 
 
 def head_check(url, timeout=15):
@@ -231,11 +260,16 @@ def download_file(mirrors, dest, label, min_size_mb=10, silent=False):
     # реальные артефакты (jar, mrpack, tar.gz) всё равно больше.
     min_size = max(min_size_mb * 1024 * 1024, 1024)
 
-    # --- Ранний выход: файл уже скачан полностью ---
-    if dest.exists() and dest.stat().st_size >= min_size:
+    # Ранний выход: файл уже скачан полностью. Для бинарных архивов
+    # (jar/zip/tar.gz/mrpack) проверяем «магические» байты — иначе
+    # HTML-заглушка от прокси, лежащая в кэше, считалась бы успешной
+    # закачкой и ломала установку на этапе распаковки.
+    if dest.exists() and dest.stat().st_size >= min_size and _looks_binary(dest):
         if not silent:
             info(f"{label}: уже скачан ({dest.stat().st_size / 1024 / 1024:.1f} МБ)")
         return True
+    if dest.exists() and not _looks_binary(dest):
+        debug.dbg(f"download_file: {dest.name} — не бинарник (HTML?), перекачиваю")
 
     if not silent:
         info(f"Скачиваю {label}...\n")
@@ -252,15 +286,23 @@ def download_file(mirrors, dest, label, min_size_mb=10, silent=False):
         else:
             start_time = time.time()
             result = download_with_aria2(url, dest, silent=silent)
-            if result is True and dest.exists() and dest.stat().st_size >= min_size:
+            if result is True and dest.exists() and dest.stat().st_size >= min_size \
+                    and _looks_binary(dest):
                 elapsed = time.time() - start_time
                 if elapsed > 0:
                     remember_mirror_speed(name, (dest.stat().st_size / 1024) / elapsed)
                 return True
     for name, url in mirrors_sorted:
         if try_download_manual(name, url, dest, silent=silent):
-            if dest.exists() and dest.stat().st_size >= min_size:
+            if dest.exists() and dest.stat().st_size >= min_size and _looks_binary(dest):
                 return True
+            if dest.exists() and not _looks_binary(dest):
+                # зеркало отдало HTML вместо бинарника — чистим и идём дальше
+                debug.dbg(f"download_file: зеркало {name} отдало HTML, удаляю {dest.name}")
+                try:
+                    dest.unlink()
+                except Exception:
+                    pass
     if not silent:
         err(f"Не удалось скачать {label}.")
     return False

@@ -109,6 +109,7 @@ EXPECTED_COMMANDS = [
     "debug", "debugreport", "install-java",
     "fo", "optifine", "prism", "legacy",
     "export", "gpu-temp", "freegames",
+    "worlds", "saveworlds", "loadworlds",
 ]
 
 # ---------- SYSTEM TRUSTSTORE ДЛЯ JAVA ----------
@@ -218,10 +219,40 @@ WINE_MONO_MIRRORS = [
      "https://dl.winehq.org/wine/wine-mono/9.0.0/wine-mono-9.0.0-x86.msi"),
 ]
 
-MODRINTH_FO_API = "https://api.modrinth.com/v2/project/fabulously-optimized/version"
+# Fabulously Optimized — официальный источник: GitHub Releases.
+# Скачиваются ТОЛЬКО release-версии (не alpha/beta/rc): фильтруем по
+# prerelease=False и additional фильтрами в именах тегов/файлов.
+FO_GITHUB_API = "https://api.github.com/repos/Fabulously-Optimized/fabulously-optimized/releases"
+FO_MODRINTH_API = "https://api.modrinth.com/v2/project/fabulously-optimized/version"
 OPTIFINE_PAGE = "https://optifine.net/downloads"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions/installer"
 FABRIC_MAVEN = "https://maven.fabricmc.net/net/fabricmc/fabric-installer"
+
+# Fabric meta API — профили версий (для установки БЕЗ Java, если installer
+# недоступен) и maven-репозиторий библиотек.
+FABRIC_META_API = "https://meta.fabricmc.net/v2"
+MAVEN_FABRIC = "https://maven.fabricmc.net/"
+MAVEN_CENTRAL = "https://repo1.maven.org/maven2/"
+
+# Mojang — списки версий и клиентские jar'ы (для доведения версии до конца,
+# чтобы лаунчер видел установленный модпак целиком).
+MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+MOJANG_RESOURCES = "https://resources.download.minecraft.net/"
+
+
+def make_github_mirrors(url):
+    """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей).
+
+    Прокси умеют отдавать только ассеты github.com/.../releases/download/...;
+    для api.github.com и прочих URL возвращают пустой список — качаем прямо.
+    """
+    if "github.com" not in url or "/releases/download/" not in url:
+        return []
+    return [
+        ("ghfast.top",      f"https://ghfast.top/{url}"),
+        ("ghproxy.net",     f"https://ghproxy.net/{url}"),
+        ("gh-proxy.com",    f"https://gh-proxy.com/{url}"),
+    ]
 
 
 def make_dxvk_mirrors(version):
@@ -243,6 +274,6 @@ FREE_GAMES = [
     ("Doom (shareware)",      "https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad"),
     ("OpenTTD (Windows)",     "https://cdn.openttd.org/openttd-releases/latest/openttd-windows.zip"),
     ("Wolfenstein 3D",        "https://distro.ibiblio.org/slitaz/sources/packages/w/wolf3d.zip"),
-    ("SuperTux (Windows)",    "https://github.com/SuperTux/supertux/releases/latest"),
+    ("SuperTux (Linux AppImage)", "https://github.com/SuperTux/supertux/releases/download/v0.6.3/SuperTux-v0.6.3-x86_64.AppImage"),
     ("Battle for Wesnoth",    "https://sourceforge.net/projects/wesnoth/files/latest/download"),
 ]

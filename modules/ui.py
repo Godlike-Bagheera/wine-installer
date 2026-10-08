@@ -30,6 +30,7 @@ from modules.commands import (
 )
 from modules.winetricks import cmd_fonts, download_winetricks
 from modules.gamemode import cmd_gamemode
+from modules.worlds import cmd_save_worlds, cmd_load_worlds, cmd_worlds_menu
 from modules.prefix import get_wine_env
 from modules.wine import (
     download_wine, download_dxvk, create_runexe,
@@ -93,6 +94,10 @@ def print_help():
     print(f"  {CYAN}prism{RESET}                — Prism Launcher")
     print(f"  {CYAN}legacy{RESET}               — Legacy Launcher")
     print(f"  {CYAN}install-java{RESET}         — портативная JDK 17")
+    print(f"{BOLD}💾 Миры (Диск D, RED OS):{RESET}")
+    print(f"  {CYAN}worlds{RESET}              — меню миров (диск D)")
+    print(f"  {CYAN}saveworlds{RESET}          — сохранить миры на Диск D")
+    print(f"  {CYAN}loadworlds{RESET}          — загрузить миры с Диска D")
     print(f"{BOLD}🔧 Утилиты:{RESET}")
     print(f"  {CYAN}fonts{RESET}               — corefonts")
     print(f"  {CYAN}steamfix <имя.exe>{RESET} — заглушка steam_api.dll")
@@ -222,6 +227,15 @@ def process_input(name, last_exe):
         return last_exe, True
     if low in ("minecraft legacy", "майнкрафт legacy", "legacy"):
         setup_legacy()
+        return last_exe, True
+    if low in ("saveworlds", "сохранитьмиры", "миры на диск", "worlds-save"):
+        cmd_save_worlds()
+        return last_exe, True
+    if low in ("loadworlds", "загрузитьмиры", "миры с диска", "worlds-load"):
+        cmd_load_worlds()
+        return last_exe, True
+    if low in ("worlds", "миры", "дискd", "диск d"):
+        cmd_worlds_menu()
         return last_exe, True
     if low in ("desktop", "ярлык"):
         warn("desktop <имя.exe>")

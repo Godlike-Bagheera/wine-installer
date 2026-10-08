@@ -1,22 +1,39 @@
-"""SHA512 + буфер обмена."""
+"""Хеши (SHA512/SHA1) + буфер обмена."""
 import hashlib
 import subprocess
 from modules import debug
 
 
-def verify_sha512(file_path, expected_hex):
-    if not expected_hex:
-        return True, ""
+def _hash_file(file_path, algo):
+    """Потоковый хеш файла. Возвращает hex-строку или None."""
     try:
-        h = hashlib.sha512()
+        h = hashlib.new(algo)
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
-        actual = h.hexdigest().lower()
-        return actual == expected_hex.lower(), actual
+        return h.hexdigest().lower()
     except Exception as e:
-        debug.dbg_exc(e, "verify_sha512")
+        debug.dbg_exc(e, f"_hash_file/{algo}")
+        return None
+
+
+def verify_sha512(file_path, expected_hex):
+    if not expected_hex:
+        return True, ""
+    actual = _hash_file(file_path, "sha512")
+    if actual is None:
         return False, ""
+    return actual == expected_hex.lower(), actual
+
+
+def verify_sha1(file_path, expected_hex):
+    """Проверка SHA-1 (используется Mojang для client.jar)."""
+    if not expected_hex:
+        return True, ""
+    actual = _hash_file(file_path, "sha1")
+    if actual is None:
+        return False, ""
+    return actual == expected_hex.lower(), actual
 
 
 def copy_to_clipboard(text):
