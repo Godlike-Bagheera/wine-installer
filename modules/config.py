@@ -109,6 +109,7 @@ EXPECTED_COMMANDS = [
     "debug", "debugreport", "install-java",
     "fo", "optifine", "prism", "legacy",
     "export", "gpu-temp", "freegames",
+    "worlds", "saveworlds", "loadworlds",
 ]
 
 # ---------- SYSTEM TRUSTSTORE ДЛЯ JAVA ----------
@@ -227,9 +228,16 @@ OPTIFINE_PAGE = "https://optifine.net/downloads"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions/installer"
 FABRIC_MAVEN = "https://maven.fabricmc.net/net/fabricmc/fabric-installer"
 
+# Fabric meta API — профили версий (для установки БЕЗ Java, если installer
+# недоступен) и maven-репозиторий библиотек.
+FABRIC_META_API = "https://meta.fabricmc.net/v2"
+MAVEN_FABRIC = "https://maven.fabricmc.net/"
+MAVEN_CENTRAL = "https://repo1.maven.org/maven2/"
+
 # Mojang — списки версий и клиентские jar'ы (для доведения версии до конца,
 # чтобы лаунчер видел установленный модпак целиком).
 MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+MOJANG_RESOURCES = "https://resources.download.minecraft.net/"
 
 
 def make_github_mirrors(url):

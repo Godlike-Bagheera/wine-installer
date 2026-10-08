@@ -18,6 +18,7 @@ from modules.config import (
     MOJANG_VERSION_MANIFEST, make_github_mirrors,
     LEGACY_JAR_MIRRORS, LEGACY_JAR_MIN_SIZE,
     SYSTEM_TRUSTSTORE_PATHS, SYSTEM_TRUSTSTORE_PASSWORD,
+    FABRIC_META_API, MAVEN_FABRIC, MAVEN_CENTRAL,
 )
 from modules.download import download_file
 from modules.hash_utils import verify_sha512, copy_to_clipboard
@@ -41,6 +42,79 @@ def _sha1(path):
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  АВТОФИКС — единая точка восстановления после сбоев
+#  (битый кэш, обрыв сети, полураспакованные файлы).
+# ═══════════════════════════════════════════════════════════════════
+
+def _autofix_remove(path):
+    """Удаляет файл/папку; при PermissionError ретраит и предлагает sudo."""
+    p = Path(path)
+    if not p.exists():
+        return True
+    for _ in range(3):
+        try:
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            debug.dbg(f"autofix: удалено {p}")
+            return True
+        except FileNotFoundError:
+            return True
+        except PermissionError:
+            info(f"Нет прав на удаление {p} — пытаемся через sudo…")
+            try:
+                subprocess.run(["sudo", "-n", "rm", "-rf", str(p)], check=False, timeout=60)
+                if not p.exists():
+                    ok("Удалено через sudo")
+                    return True
+            except Exception as e:
+                debug.dbg_exc(e, "autofix/sudo rm")
+            err(f"Не удалить {p}")
+            hint(f"Удали вручную:  rm -rf '{p}'")
+            return False
+        except Exception as e:
+            debug.dbg_exc(e, f"autofix/remove {p}")
+    return not p.exists()
+
+
+def _autofix_clean_file(path, min_bytes=0):
+    """Если файл битый/нулевой/недокачанный — удаляем (чтобы скачался заново)."""
+    p = Path(path)
+    try:
+        if p.exists() and p.stat().st_size < max(min_bytes, 1):
+            warn(f"Битый/пустой файл в кэше: {p.name} — автофикс: удаляю и скачаю заново")
+            _autofix_remove(p)
+            return True
+    except Exception as e:
+        debug.dbg_exc(e, "autofix/clean_file")
+    return False
+
+
+def _autofix_is_html_jar(path):
+    """JAR, который на деле HTML-заглушка (частый случай у optifine.net/GitHub-прокси)."""
+    p = Path(path)
+    try:
+        if not p.exists():
+            return False
+        with open(p, "rb") as f:
+            head = f.read(16)
+        return head.startswith(b"<") or head.startswith(b"<!D") or head.startswith(b"\xef\xbb\xbf<")
+    except Exception:
+        return False
+
+
+def _ask_retry(label):
+    """Вежливый вопрос «повторить?» — Enter/y/д = да. Возвращает bool."""
+    try:
+        ans = input(f"{YELLOW}Автофикс: повторить «{label}»? [Y/n]: {RESET}").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return False
+    return ans in ("", "y", "yes", "д", "да")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -333,6 +407,11 @@ def download_fabric_installer():
     installers_dir = WINE_DIR / "fabric"
     installers_dir.mkdir(parents=True, exist_ok=True)
     dest = installers_dir / "fabric-installer.jar"
+    # автофикс: битый/HTML-заглушка в кэше -> удалить и качнуть заново
+    _autofix_clean_file(dest, min_bytes=100 * 1024)
+    if _autofix_is_html_jar(dest):
+        warn("Кэш fabric-installer.jar — HTML-заглушка, автофикс: перекачиваю")
+        _autofix_remove(dest)
     if dest.exists() and dest.stat().st_size > 100 * 1024:
         return dest
     ctx = ssl.create_default_context()
@@ -348,8 +427,79 @@ def download_fabric_installer():
     url = f"{FABRIC_MAVEN}/{latest}/fabric-installer-{latest}.jar"
     info(f"Скачиваю Fabric installer {latest}...")
     if download_file([("direct", url)], dest, "Fabric installer", min_size_mb=0):
+        if _autofix_is_html_jar(dest):
+            warn("Скачался HTML вместо JAR — автофикс: удаляю битый файл")
+            _autofix_remove(dest)
+            return None
         return dest
     return None
+
+
+def _maven_path(coord):
+    """'net.fabricmc:fabric-loader:0.19.5' -> 'net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar'"""
+    g, a, v = coord.split(":")
+    return f"{g.replace('.', '/')}/{a}/{v}/{a}-{v}.jar"
+
+
+def _download_lib(lib_entry, game_dir):
+    """Скачивает одну библиотеку профиля Fabric в libraries/. Возвращает True/False."""
+    dl = lib_entry.get("downloads", {}) or {}
+    art = dl.get("artifact") or {}
+    rel = art.get("path")
+    if not rel:
+        name = lib_entry.get("name", "")
+        if ":" not in name:
+            return True   # native-rule без артефакта — не критично
+        rel = _maven_path(name)
+    dest = game_dir / "libraries" / rel
+    if dest.exists() and dest.stat().st_size > 0:
+        return True
+    urls = []
+    if art.get("url"):
+        urls.append(("direct", art["url"]))
+    urls.append(("maven.fabricmc.net", MAVEN_FABRIC + rel))
+    urls.append(("Maven Central", MAVEN_CENTRAL + rel))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    return bool(download_file(urls, dest, Path(rel).name, min_size_mb=0, silent=True))
+
+
+def install_fabric_profile(game_dir, mc_version, loader_version):
+    """Устанавливает Fabric БЕЗ Java: берёт готовый профиль с meta.fabricmc.net,
+    кладёт его в versions/<id>/ и скачивает библиотеки (loader+intermediary+mixin).
+
+    Это автофикс-путь: когда нет Java или installer упал, лаунчер всё равно
+    увидит рабочую версию Fabric после докачки vanilla jar (finish_version_install).
+    """
+    game_dir = Path(game_dir)
+    version_id = f"fabric-loader-{loader_version}-{mc_version}"
+    vdir = game_dir / "versions" / version_id
+    prof_path = vdir / f"{version_id}.json"
+    try:
+        profile = _http_get_json(
+            f"{FABRIC_META_API}/versions/loader/{mc_version}/{loader_version}/profile",
+            timeout=60)
+    except Exception as e:
+        debug.dbg_exc(e, "install_fabric_profile/meta")
+        warn(f"meta.fabricmc.net недоступен: {e}")
+        return False
+    if profile.get("id") != version_id:
+        profile["id"] = version_id
+    vdir.mkdir(parents=True, exist_ok=True)
+    prof_path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    ok(f"Профиль Fabric создан: versions/{version_id}/")
+    libs = profile.get("libraries", [])
+    info(f"Скачиваю библиотеки Fabric ({len(libs)} шт.)...")
+    done = failed = 0
+    for l in libs:
+        if _download_lib(l, game_dir):
+            done += 1
+        else:
+            failed += 1
+    ok(f"Библиотек: {done}, ошибок: {failed}")
+    lp = game_dir / "launcher_profiles.json"
+    if not lp.exists():
+        lp.write_text(json.dumps({"profiles": {}, "clientToken": ""}, indent=2), encoding="utf-8")
+    return failed == 0
 
 
 def install_fabric_loader(game_dir, mc_version, loader_version, java_bin="java"):
@@ -490,6 +640,31 @@ def finish_version_install(game_dir, mc_version, version_id):
     return True
 
 
+def unpack_mod_files(manifest, game_dir):
+    """Доборка недостающих модов из манифеста .mrpack. Возвращает число успешных."""
+    fixed = 0
+    for entry in manifest.get("files", []):
+        path = entry.get("path", "")
+        env = entry.get("env", {})
+        if env.get("client") == "unsupported":
+            continue
+        dest = Path(game_dir) / path
+        hashes = entry.get("hashes", {})
+        sha512 = hashes.get("sha512")
+        if dest.exists() and sha512 and verify_sha512(dest, sha512)[0]:
+            continue
+        urls = entry.get("downloads", [])
+        if not urls:
+            continue
+        mirrors = [("direct", u) for u in urls]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _autofix_remove(dest) if dest.exists() else None
+        if download_file(mirrors, dest, path.split("/")[-1], min_size_mb=0, silent=True):
+            if not sha512 or verify_sha512(dest, sha512)[0]:
+                fixed += 1
+    return fixed
+
+
 def unpack_mrpack_to_game(mrpack_path, game_dir, java_bin="java"):
     info(f"{BOLD}Распаковка .mrpack{RESET}")
     try:
@@ -515,8 +690,12 @@ def unpack_mrpack_to_game(mrpack_path, game_dir, java_bin="java"):
     if loader_version:
         version_id = f"fabric-loader-{loader_version}-{mc_version}"
         if not install_fabric_loader(game_dir, mc_version, loader_version, java_bin):
-            warn("Fabric installer не сработал")
-            version_id = None
+            warn("Fabric installer не сработал — автофикс: ставлю профиль через meta.fabricmc.net (без Java)")
+            if install_fabric_profile(game_dir, mc_version, loader_version):
+                ok("Fabric установлен без Java (готовый профиль + библиотеки)")
+            else:
+                warn("И этот путь не сработал — mods/config всё равно лягут, лаунчер докачает сам")
+                version_id = None
     files = manifest.get("files", [])
     info(f"Скачиваю {len(files)} файлов модов...")
     downloaded = 0
@@ -539,17 +718,29 @@ def unpack_mrpack_to_game(mrpack_path, game_dir, java_bin="java"):
         if not urls:
             failed += 1
             continue
-        if download_file([("direct", urls[0])], dest, path.split("/")[-1], min_size_mb=0, silent=True):
+        mirrors = [("direct", u) for u in urls]
+        if download_file(mirrors, dest, path.split("/")[-1], min_size_mb=0, silent=True):
             if sha512:
                 ok_hash, actual = verify_sha512(dest, sha512)
                 if not ok_hash:
-                    warn(f"  Хеш не совпал: {path}")
+                    # автофикс: битый файл удалён + вторая попытка по всем зеркалам
+                    warn(f"  Хеш не совпал: {path} — автофикс: перекачиваю")
+                    _autofix_remove(dest)
+                    if download_file(mirrors, dest, path.split("/")[-1], min_size_mb=0, silent=True) \
+                            and verify_sha512(dest, sha512)[0]:
+                        downloaded += 1
+                        continue
                     failed += 1
                     continue
             downloaded += 1
         else:
             failed += 1
     ok(f"Модов: {downloaded}, ошибок: {failed}")
+    if failed and _ask_retry("скачать недостающие моды"):
+        again = unpack_mod_files(manifest, game_dir)
+        downloaded += again
+        failed -= again
+        ok(f"После автофикса: модов {downloaded}, ошибок {max(failed, 0)}")
     try:
         with zipfile.ZipFile(mrpack_path, "r") as z:
             for prefix in ["overrides/", "client-overrides/"]:
@@ -581,9 +772,10 @@ def _fo_is_release(tag, name=""):
 def _pick_fo_release():
     """Ищет последний RELEASE Fabulously Optimized на официальном GitHub.
 
-    Возвращает dict: tag, version, mc_versions, url, name, direct_url.
+    Возвращает dict: tag, version, mrpack_url, mrpack_name, zip_url, zip_name, size.
     Только release-версии: prerelease=False, draft отброшен, плюс фильтр
     по имени тега (v14.1.0 годится, v15.0.0-alpha.5 / beta — нет).
+    .zip-ассет ищется как запасной вариант (если .mrpack недоступен).
     """
     releases = _http_get_json(f"{FO_GITHUB_API}?per_page=100", timeout=30)
     best = None
@@ -593,17 +785,20 @@ def _pick_fo_release():
         tag = r.get("tag_name", "")
         if not _fo_is_release(tag):
             continue
-        asset = next((a for a in r.get("assets", [])
-                      if a["name"].endswith(".mrpack") and _fo_is_release(a["name"])), None)
-        if not asset:
+        assets = [a for a in r.get("assets", []) if _fo_is_release(a["name"])]
+        mrpack = next((a for a in assets if a["name"].endswith(".mrpack")), None)
+        if not mrpack:
             continue
+        zip_asset = next((a for a in assets if a["name"].endswith(".zip")), None)
         cand = {
             "tag": tag,
             "version": tag.lstrip("v"),
             "mc_versions": [],
-            "url": asset["browser_download_url"],
-            "name": asset["name"],
-            "size": asset.get("size", 0),
+            "mrpack_url": mrpack["browser_download_url"],
+            "mrpack_name": mrpack["name"],
+            "zip_url": zip_asset["browser_download_url"] if zip_asset else None,
+            "zip_name": zip_asset["name"] if zip_asset else None,
+            "size": mrpack.get("size", 0),
         }
         # сортировка по числовой части тега — берём самый свежий релиз
         nums = [int(x) for x in re.findall(r"\d+", tag)]
@@ -617,6 +812,108 @@ def _pick_fo_release():
     return best
 
 
+def _validate_mrpack(path):
+    """True, если файл — валидный .mrpack с modrinth.index.json и версией MC."""
+    try:
+        with zipfile.ZipFile(path, "r") as z:
+            m = json.loads(z.read("modrinth.index.json").decode("utf-8"))
+        return bool(m.get("dependencies", {}).get("minecraft"))
+    except Exception:
+        return False
+
+
+def unpack_fo_zip_to_game(zip_path, game_dir, rel_version):
+    """Запасной путь установки FO: официальный .zip с GitHub Releases.
+
+    Внутри него modlist.html (ссылки на файлы CurseForge) + overrides/.
+    Скачиваем перечисленные моды по ссылкам в mods/, кладём overrides.
+    Профиль Fabric создаётся без Java через meta.fabricmc.net.
+    Возвращает True/False.
+    """
+    game_dir = Path(game_dir)
+    info(f"{BOLD}Установка из ZIP (запасной вариант){RESET}")
+    try:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            modlist_html = ""
+            manifest_json = None
+            for name in z.namelist():
+                base = name.rsplit("/", 1)[-1]
+                if base == "modlist.html":
+                    modlist_html = z.read(name).decode("utf-8", errors="replace")
+                elif base == "manifest.json":
+                    try:
+                        manifest_json = json.loads(z.read(name))
+                    except Exception:
+                        pass
+            if not modlist_html:
+                err("В zip нет modlist.html")
+                return False
+            urls = re.findall(
+                r'href="(https://[^"]+/(?:download|files)/[^"]+\.jar)"', modlist_html)
+            mc_version = None
+            loader_version = None
+            if manifest_json:
+                mc_version = (manifest_json.get("minecraftVersion")
+                              or manifest_json.get("version"))
+                parts = str(manifest_json.get("manifestVersion", ""))
+                debug.dbg(f"manifest.json keys: {list(manifest_json.keys())}, mc={mc_version}, mf={parts}")
+            for name in z.namelist():
+                if name.endswith("/") and "overrides/" in name:
+                    rel = name.split("overrides/", 1)[1]
+                    if not rel:
+                        continue
+                    target = game_dir / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(name) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+            ok("Overrides из zip распакованы")
+    except Exception as e:
+        debug.dbg_exc(e, "unpack_fo_zip")
+        err(f"Распаковка zip: {e}")
+        return False
+
+    if not urls:
+        err("В modlist.html не нашлось ссылок на моды")
+        return False
+    # уникальные ссылки, сохраняя порядок
+    seen_u = set()
+    uniq_urls = [u for u in urls if not (u in seen_u or seen_u.add(u))]
+    info(f"Скачиваю {len(uniq_urls)} модов с CurseForge...")
+    mods_dir = game_dir / "mods"
+    mods_dir.mkdir(parents=True, exist_ok=True)
+    done = failed = 0
+    for u in uniq_urls:
+        fname = u.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+        dest = mods_dir / fname
+        if dest.exists() and dest.stat().st_size > 10_000:
+            done += 1
+            continue
+        if download_file([("direct", u)], dest, fname, min_size_mb=0, silent=True):
+            done += 1
+        else:
+            failed += 1
+    ok(f"Модов: {done}, ошибок: {failed}")
+
+    # профиль Fabric: пробуем определить версию загрузчика из первого конфига
+    dep = game_dir / "config" / "fabric_loader_dependencies.json"
+    if dep.exists():
+        try:
+            d = json.loads(dep.read_text(encoding="utf-8"))
+            loader_version = (d.get("overrides", {}) or {}).get("java", {}).get("net.fabricmc.fabric-loader") \
+                or d.get("v")
+        except Exception:
+            pass
+    if not mc_version:
+        warn("Не удалось определить версию Minecraft из zip — лаунчер сам подскажет.")
+        hint(f"Профиль можно создать вручную: Fabric {loader_version or '?'} для нужной MC")
+        return True
+    if loader_version:
+        install_fabric_profile(game_dir, mc_version, loader_version)
+        finish_version_install(game_dir, mc_version, f"fabric-loader-{loader_version}-{mc_version}")
+    hint(f"FO v{rel_version} установлен из zip-варианта")
+    return True
+
+
 def setup_fabulously_optimized():
     info(f"{BOLD}Скачивание Fabulously Optimized{RESET}")
     hint("Источник: официальный GitHub (только RELEASE, без alpha/beta)")
@@ -626,28 +923,7 @@ def setup_fabulously_optimized():
         debug.dbg_exc(e, "setup_fo/github")
         err(f"GitHub API: {e}")
         return False
-    info(f"Release: {rel['tag']} ({rel['name']}, {rel['size'] // 1024} КБ)")
-    dest = WINE_DIR / rel["name"]
-    mirrors = [("GitHub (официально)", rel["url"])] + make_github_mirrors(rel["url"])
-    if not download_file(mirrors, dest, "Fabulously Optimized", min_size_mb=0):
-        err("Не удалось скачать .mrpack ни с одного зеркала")
-        return False
-    # проверка целостности по modrinth.index.json внутри архива
-    try:
-        with zipfile.ZipFile(dest, "r") as z:
-            m = json.loads(z.read("modrinth.index.json").decode("utf-8"))
-        deps = m.get("dependencies", {})
-        if not deps.get("minecraft"):
-            raise RuntimeError("нет версии minecraft в манифесте")
-    except Exception as e:
-        debug.dbg_exc(e, "setup_fo/validate")
-        err(f"Скачанный файл повреждён: {e}")
-        try:
-            dest.unlink()
-        except Exception:
-            pass
-        return False
-    ok(f"Скачано: {dest}")
+    info(f"Release: {rel['tag']} ({rel['mrpack_name']}, {rel['size'] // 1024} КБ)")
 
     # ── Куда ставить: ищем реальные .minecraft / game на системе ──
     found = choose_minecraft_dir(auto=True)
@@ -665,9 +941,9 @@ def setup_fabulously_optimized():
             found = Path(manual).expanduser()
         elif manual:
             err("Такой папки нет")
+            return False
         else:
-            hint(f"Скачанный .mrpack лежит тут: {dest}")
-            hint("Распакуешь позже сам или повтори `fo` после запуска лаунчера.")
+            hint("Повтори `fo` после запуска лаунчера.")
             return True
     game_dir = Path(found)
     (game_dir / "versions").mkdir(parents=True, exist_ok=True)
@@ -675,13 +951,43 @@ def setup_fabulously_optimized():
 
     java_bin, java_home, java_status = find_java()
     if not java_bin:
-        warn("Java не найдена. Fabric installer требует Java.")
-        hint("Установи: install-java (пункт 6 этого меню)")
-        hint(f".mrpack уже скачан: {dest}")
+        info("Java не найдена — использую установку БЕЗ Java (meta.fabricmc.net)")
+
+    # ═══ Путь 1: основной — .mrpack с официального GitHub ═══
+    dest = WINE_DIR / rel["mrpack_name"]
+    _autofix_clean_file(dest, min_bytes=10 * 1024)
+    if dest.exists() and not _validate_mrpack(dest):
+        warn("Кэш .mrpack повреждён — автофикс: перекачиваю")
+        _autofix_remove(dest)
+    mrpack_ok = False
+    if dest.exists() or download_file(
+            [("GitHub (официально)", rel["mrpack_url"])] + make_github_mirrors(rel["mrpack_url"]),
+            dest, "Fabulously Optimized (.mrpack)", min_size_mb=0):
+        if _validate_mrpack(dest):
+            mrpack_ok = True
+        else:
+            _autofix_remove(dest)
+    if mrpack_ok:
+        ok(f".mrpack скачан и проверен: {dest}")
+        unpack_mrpack_to_game(dest, game_dir, java_bin or "java")
+        hint("Готово! Версия Fabric появится в лаунчере")
         return True
-    info(f"Java: {java_bin}")
-    unpack_mrpack_to_game(dest, game_dir, java_bin)
-    hint("Готово! Версия Fabric появится в лаунчере")
+
+    # ═══ Путь 2: запасной — официальный .zip релиза + авто-разархивация ═══
+    if not rel.get("zip_url"):
+        err("Не удалось скачать .mrpack, а zip-ассета в релизе нет")
+        return False
+    warn("Основной .mrpack недоступен — автофикс: ставлю из официального zip релиза")
+    zpath = WINE_DIR / rel["zip_name"]
+    _autofix_clean_file(zpath, min_bytes=10 * 1024)
+    mirrors = [("GitHub (официально)", rel["zip_url"])] + make_github_mirrors(rel["zip_url"])
+    if not (zpath.exists() and zipfile.is_zipfile(zpath)) and \
+            not (download_file(mirrors, zpath, "Fabulously Optimized (.zip)", min_size_mb=0)
+                 and zipfile.is_zipfile(zpath)):
+        err("Ни .mrpack, ни .zip скачать не удалось")
+        hint("Проверь сеть/VPN или скачай вручную с https://github.com/Fabulously-Optimized/fabulously-optimized/releases")
+        return False
+    unpack_fo_zip_to_game(zpath, game_dir, rel["version"])
     return True
 
 
@@ -779,9 +1085,14 @@ def setup_optifine():
     fname = f"OptiFine_{mc_ver}_HD_U_{opti_ver}.jar"
     url = f"http://optifine.net/adloadx?f={fname}"
     dest = WINE_DIR / fname
-    if not download_file([("direct", url)], dest, "OptiFine", min_size_mb=0):
-        err("Не удалось скачать")
-        return False
+    # автофикс: битый кэш OptiFine (HTML вместо JAR) чистим заранее
+    if _autofix_is_html_jar(dest):
+        warn(f"Кэш {fname} — HTML-заглушка, автофикс: перекачиваю")
+        _autofix_remove(dest)
+    if not dest.exists():
+        if not download_file([("direct", url)], dest, "OptiFine", min_size_mb=0):
+            err("Не удалось скачать")
+            return False
     # скачанный "jar" с adloadx иногда оказывается HTML-заглушкой
     head = b""
     try:
@@ -793,10 +1104,7 @@ def setup_optifine():
         err("Скачался не JAR (похоже на страницу-заглушку optifine.net)")
         hint("Открой браузером https://optifine.net/downloads, скачай вручную,")
         hint(f"положи файл в {WINE_DIR} и повтори команду — файл уже будет там.")
-        try:
-            dest.unlink()
-        except Exception:
-            pass
+        _autofix_remove(dest)
         return False
     ok(f"Скачано: {dest}")
     java_bin, java_home, java_status = find_java()
@@ -857,14 +1165,111 @@ def setup_optifine():
         hint("Готово! Выбери эту версию в лаунчере")
     else:
         warn("Похоже, установка в окне OptiFine не завершилась (профиль не создан).")
-        hint("Запусти установщик ещё раз и в поле Folder вставь путь выше;")
-        hint("кнопка Install должна сказать 'OptiFine is installed successfully'.")
+        if _ask_retry("запустить установщик OptiFine ещё раз"):
+            try:
+                subprocess.run([java_bin, "-jar", str(dest)], check=False)
+            except Exception as e:
+                debug.dbg_exc(e, "setup_optifine/retry")
+            cand = list((game_dir / "versions").glob("OptiFine*/*.json")) \
+                if (game_dir / "versions").is_dir() else []
+            if cand:
+                version_id = cand[-1].stem
+                ok(f"На этот раз профиль создан: {version_id}")
+                finish_version_install(game_dir, mc_ver, version_id)
+                hint("Готово! Выбери эту версию в лаунчере")
+                return True
+        hint("Ручной вариант: запусти установщик сам (java -jar ...) и в поле Folder")
+        hint("вставь путь выше; кнопка Install должна сказать 'installed successfully'.")
     return True
 
 
 # ═══════════════════════════════════════════════════════════════════
 #  МЕНЮ
 # ═══════════════════════════════════════════════════════════════════
+
+def cmd_fo_autofix():
+    """Диагностика и автопочинка установленной игры (.minecraft)."""
+    info(f"{BOLD}Автофикс Minecraft: диагностика{RESET}")
+    found = choose_minecraft_dir(auto=True)
+    if found is None:
+        err("Папка .minecraft не найдена")
+        hint("Запусти лаунчер или укажи путь вручную (пункт «Показать пути»).")
+        return False
+    game_dir = Path(found)
+    ok(f"Проверяю: {game_dir}")
+    problems = 0
+
+    # 1) launcher_profiles.json
+    lp = game_dir / "launcher_profiles.json"
+    if not lp.exists():
+        warn("Нет launcher_profiles.json — создаю")
+        lp.write_text(json.dumps({"profiles": {}, "clientToken": ""}, indent=2), encoding="utf-8")
+        problems += 1
+    else:
+        try:
+            json.loads(lp.read_text(encoding="utf-8"))
+        except Exception:
+            warn("launcher_profiles.json повреждён — пересоздаю (автофикс)")
+            _autofix_remove(lp)
+            lp.write_text(json.dumps({"profiles": {}, "clientToken": ""}, indent=2), encoding="utf-8")
+            problems += 1
+
+    # 2) пустые/битые профили версий
+    vdir = game_dir / "versions"
+    if vdir.is_dir():
+        for vd in sorted(vdir.iterdir()):
+            if not vd.is_dir():
+                continue
+            pj = vd / f"{vd.name}.json"
+            if not pj.exists():
+                warn(f"Профиль {vd.name}: нет .json — удаляю пустую папку (автофикс)")
+                _autofix_remove(vd)
+                problems += 1
+                continue
+            try:
+                json.loads(pj.read_text(encoding="utf-8"))
+            except Exception:
+                warn(f"Профиль {vd.name}: .json повреждён — удаляю (лаунчер пересоздаёт)")
+                _autofix_remove(vd)
+                problems += 1
+
+    # 3) битые JAR-файлы в mods/ (HTML-заглушки вместо мода)
+    mods = game_dir / "mods"
+    if mods.is_dir():
+        for jf in sorted(mods.glob("*.jar")):
+            if _autofix_is_html_jar(jf):
+                warn(f"Мод {jf.name} — HTML-заглушка, удаляю (перекачается через `fo`)")
+                _autofix_remove(jf)
+                problems += 1
+            elif jf.stat().st_size == 0:
+                warn(f"Мод {jf.name} пустой, удаляю")
+                _autofix_remove(jf)
+                problems += 1
+
+    # 4) версии без client.jar -> доводим через finish_version_install
+    if vdir.is_dir():
+        for vd in sorted(vdir.iterdir()):
+            pj = vd / f"{vd.name}.json" if vd.is_dir() else None
+            if not pj or not pj.exists():
+                continue
+            try:
+                prof = json.loads(pj.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            inherits = prof.get("inheritsFrom")
+            jar = vd / f"{vd.name}.jar"
+            vanilla_jar = game_dir / "versions" / inherits / f"{inherits}.jar" if inherits else None
+            if inherits and vanilla_jar and not vanilla_jar.exists() and not jar.exists():
+                info(f"Версии {vd.name} не хватает vanilla jar — докачиваю (автофикс)")
+                finish_version_install(game_dir, inherits, vd.name)
+                problems += 1
+
+    if problems:
+        ok(f"Автофикс завершён: исправлено проблем: {problems}")
+    else:
+        ok("Проблем не найдено — игра в порядке")
+    return True
+
 
 def cmd_minecraft():
     while True:
@@ -875,6 +1280,8 @@ def cmd_minecraft():
         print(f"  {CYAN}4{RESET}) OptiFine (скачать + установить)")
         print(f"  {CYAN}5{RESET}) Показать пути")
         print(f"  {CYAN}6{RESET}) Установить Java (для OptiFine)")
+        print(f"  {CYAN}7{RESET}) Автофикс игры (проверка + починка ошибок)")
+        print(f"  {CYAN}8{RESET}) Миры → Диск D / ← Диск D (RED OS)")
         print(f"  {CYAN}0{RESET}) Назад")
         try:
             choice = input(f"{YELLOW}Выбор: {RESET}").strip()
@@ -894,6 +1301,11 @@ def cmd_minecraft():
             show_minecraft_paths()
         elif choice == "6":
             cmd_install_java()
+        elif choice == "7":
+            cmd_fo_autofix()
+        elif choice == "8":
+            from modules.worlds import cmd_worlds_menu
+            cmd_worlds_menu()
         elif choice == "0":
             return
         else:
