@@ -218,10 +218,28 @@ WINE_MONO_MIRRORS = [
      "https://dl.winehq.org/wine/wine-mono/9.0.0/wine-mono-9.0.0-x86.msi"),
 ]
 
-MODRINTH_FO_API = "https://api.modrinth.com/v2/project/fabulously-optimized/version"
+# Fabulously Optimized — официальный источник: GitHub Releases.
+# Скачиваются ТОЛЬКО release-версии (не alpha/beta/rc): фильтруем по
+# prerelease=False и additional фильтрами в именах тегов/файлов.
+FO_GITHUB_API = "https://api.github.com/repos/Fabulously-Optimized/fabulously-optimized/releases"
+FO_MODRINTH_API = "https://api.modrinth.com/v2/project/fabulously-optimized/version"
 OPTIFINE_PAGE = "https://optifine.net/downloads"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions/installer"
 FABRIC_MAVEN = "https://maven.fabricmc.net/net/fabricmc/fabric-installer"
+
+# Mojang — списки версий и клиентские jar'ы (для доведения версии до конца,
+# чтобы лаунчер видел установленный модпак целиком).
+MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json"
+
+
+def make_github_mirrors(url):
+    """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей)."""
+    return [
+        ("ghfast.top",      f"https://ghfast.top/{url}"),
+        ("ghproxy.net",     f"https://ghproxy.net/{url}"),
+        ("gh-proxy.com",    f"https://gh-proxy.com/{url}"),
+        ("GitHub (прямой)", url),
+    ]
 
 
 def make_dxvk_mirrors(version):

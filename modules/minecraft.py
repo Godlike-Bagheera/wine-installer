@@ -6,6 +6,7 @@ import json
 import shutil
 import tarfile
 import zipfile
+import hashlib
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -13,14 +14,33 @@ from modules import debug
 from modules.colors import ok, info, warn, err, hint, CYAN, YELLOW, MAGENTA, BOLD, RESET
 from modules.config import (
     WINE_DIR, PRISM_DIR, PRISM_URL, WINE_PREFIX,
-    MODRINTH_FO_API, OPTIFINE_PAGE, FABRIC_META, FABRIC_MAVEN,
+    FO_GITHUB_API, OPTIFINE_PAGE, FABRIC_META, FABRIC_MAVEN,
+    MOJANG_VERSION_MANIFEST, make_github_mirrors,
     LEGACY_JAR_MIRRORS, LEGACY_JAR_MIN_SIZE,
     SYSTEM_TRUSTSTORE_PATHS, SYSTEM_TRUSTSTORE_PASSWORD,
 )
 from modules.download import download_file
 from modules.hash_utils import verify_sha512, copy_to_clipboard
 from modules.java import find_java, install_portable_java, cmd_install_java
-from modules.prefix import get_minecraft_game_path
+from modules.prefix import choose_minecraft_dir
+
+
+def _http_get_json(url, timeout=30):
+    """GET url -> распарсенный JSON (SSL-контекст как в остальном проекте)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.5"})
+    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", errors="replace"))
+
+
+def _sha1(path):
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -337,7 +357,17 @@ def install_fabric_loader(game_dir, mc_version, loader_version, java_bin="java")
     if not installer:
         err("Fabric installer не скачан")
         return False
-    info(f"Устанавливаю Fabric {loader_version} для MC {mc_version}...")
+    game_dir = Path(game_dir)
+    # Fabric installer refuse работать, если launcher directory не существует —
+    # раньше это давало "Launcher directory not found" и установка молча падала.
+    try:
+        (game_dir / "versions").mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        debug.dbg_exc(e, "install_fabric_loader/mkdir")
+        err(f"Не создать каталог игры {game_dir}: {e}")
+        return False
+    expected_json = game_dir / "versions" / f"fabric-loader-{loader_version}-{mc_version}" / f"fabric-loader-{loader_version}-{mc_version}.json"
+    info(f"Устанавливаю Fabric {loader_version} для MC {mc_version} в {game_dir}...")
     try:
         r = subprocess.run(
             [java_bin, "-jar", str(installer), "client",
@@ -345,21 +375,119 @@ def install_fabric_loader(game_dir, mc_version, loader_version, java_bin="java")
              "-mcversion", mc_version,
              "-loader", loader_version,
              "-noprofile"],
-            check=False, timeout=300, capture_output=True, text=True,
+            check=False, timeout=600, capture_output=True, text=True,
         )
-        if r.returncode == 0:
-            ok(f"Fabric {loader_version} установлен")
-            return True
-        err(f"Fabric installer код {r.returncode}")
-        if r.stdout:
-            print(r.stdout[-500:])
-        if r.stderr:
-            print(r.stderr[-500:])
+        if r.returncode != 0:
+            err(f"Fabric installer код {r.returncode}")
+            out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+            if out:
+                print(out[-800:])
+            return False
+        if not expected_json.exists():
+            err(f"Профиль версии не создан: {expected_json}")
+            return False
+        ok(f"Fabric {loader_version} установлен")
+        return True
+    except FileNotFoundError:
+        err("Java не найдена (путь битый). Установи: install-java")
         return False
     except Exception as e:
         debug.dbg_exc(e, "install_fabric_loader")
         err(f"Fabric: {e}")
         return False
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  ДОБОРКА ВЕРСИИ: vanilla jar + merged profile + assets index
+#  Без этого лаунчер видит профиль, но игра не стартует
+#  ("сборки не знают куда встать / появляются ошибки").
+# ═══════════════════════════════════════════════════════════════════
+
+def finish_version_install(game_dir, mc_version, version_id):
+    """Доводит установку до конца: скачивает client.jar Mojang,
+    объединяет профиль загрузчика с манифестом Minecraft и кладёт
+    assets-index. Всё — строго в <game_dir>/versions/."""
+    game_dir = Path(game_dir)
+    vdir = game_dir / "versions" / version_id
+    prof_path = vdir / f"{version_id}.json"
+    if not prof_path.exists():
+        err(f"Профиль не найден: {prof_path}")
+        return False
+    try:
+        manifest = _http_get_json(MOJANG_VERSION_MANIFEST)
+        entry = next(v for v in manifest["versions"] if v["id"] == mc_version)
+        vm = _http_get_json(entry["url"], timeout=60)
+    except Exception as e:
+        debug.dbg_exc(e, "finish_version/mojang")
+        warn(f"Mojang meta недоступна: {e}")
+        hint("Версия уже лежит в versions/ — лаунчер может докачать сам при запуске.")
+        return True
+
+    try:
+        profile = json.loads(prof_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        debug.dbg_exc(e, "finish_version/read_profile")
+        return False
+
+    # Уже доведено ранее?
+    if profile.get("inheritsFrom") == mc_version and profile.get("mainClass"):
+        ok("Версия уже доведена (merged-профиль)")
+    else:
+        merged = dict(vm)
+        merged["id"] = version_id
+        merged["inheritsFrom"] = mc_version
+        merged["jar"] = mc_version
+        merged["mainClass"] = profile.get("mainClass", vm.get("mainClass"))
+        merged["type"] = profile.get("type", "release")
+        libs = []
+        for l in profile.get("libraries", []) + vm.get("libraries", []):
+            l = dict(l)
+            l.pop("downloaders", None)
+            libs.append(l)
+        merged["libraries"] = libs
+        prof_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        ok("Профиль объединён с манифестом Minecraft")
+
+    # vanilla client.jar -> versions/<mc>/<mc>.jar
+    jar_path = game_dir / "versions" / mc_version / f"{mc_version}.jar"
+    dl = vm.get("downloads", {}).get("client", {})
+    url = dl.get("url") or dl.get("raw", {}).get("url")   # старые версии имеют raw/server
+    sha1 = dl.get("sha1") or dl.get("raw", {}).get("sha1")
+    if url:
+        jar_path.parent.mkdir(parents=True, exist_ok=True)
+        if jar_path.exists() and sha1 and _sha1(jar_path) == sha1:
+            ok("client.jar уже на месте")
+        else:
+            info(f"Скачиваю Minecraft {mc_version} client.jar (~40 МБ)...")
+            if download_file([("Mojang", url)], jar_path, "Minecraft client", min_size_mb=5):
+                if sha1 and _sha1(jar_path) != sha1:
+                    warn("SHA-1 client.jar не совпал — удаляю битый файл")
+                    try:
+                        jar_path.unlink()
+                    except Exception:
+                        pass
+                else:
+                    ok("client.jar скачан и проверен")
+            else:
+                warn("client.jar не скачан — лаунчер докачает сам")
+    # assets index -> assets/indexes/<id>.json
+    assets = vm.get("assetIndex", {})
+    a_url, a_id = assets.get("url"), assets.get("id")
+    if a_url and a_id:
+        a_path = game_dir / "assets" / "indexes" / f"{a_id}.json"
+        a_path.parent.mkdir(parents=True, exist_ok=True)
+        if not a_path.exists():
+            info("Скачиваю индекс ресурсов (assets)...")
+            if download_file([("Mojang", a_url)], a_path, "Assets index", min_size_mb=0):
+                ok("Assets index скачан")
+            else:
+                warn("Assets index не скачан — не критично")
+    # launcher_profiles.json — без него Legacy/TLauncher считают папку «не игрой»
+    lp = game_dir / "launcher_profiles.json"
+    if not lp.exists():
+        lp.write_text(json.dumps({"profiles": {}, "clientToken": ""}, indent=2), encoding="utf-8")
+        ok("Создан launcher_profiles.json")
+    return True
 
 
 def unpack_mrpack_to_game(mrpack_path, game_dir, java_bin="java"):
@@ -383,9 +511,12 @@ def unpack_mrpack_to_game(mrpack_path, game_dir, java_bin="java"):
         err("Не найдена версия Minecraft")
         return False
     info(f"MC {mc_version}, Fabric {loader_version or 'не указан'}")
+    version_id = None
     if loader_version:
+        version_id = f"fabric-loader-{loader_version}-{mc_version}"
         if not install_fabric_loader(game_dir, mc_version, loader_version, java_bin):
             warn("Fabric installer не сработал")
+            version_id = None
     files = manifest.get("files", [])
     info(f"Скачиваю {len(files)} файлов модов...")
     downloaded = 0
@@ -435,92 +566,140 @@ def unpack_mrpack_to_game(mrpack_path, game_dir, java_bin="java"):
     except Exception as e:
         debug.dbg_exc(e, "unpack_mrpack/overrides")
         warn(f"Overrides: {e}")
+    if version_id:
+        info("Доводим установку версии до конца (vanilla jar + профиль)...")
+        finish_version_install(game_dir, mc_version, version_id)
     return True
+
+
+def _fo_is_release(tag, name=""):
+    """True, если тег/имя — чистый релиз (не alpha/beta/rc/dev/nightly)."""
+    s = f"{tag} {name}".lower()
+    return not re.search(r"alpha|beta|rc\d|[_\-.]rc|dev|nightly|snapshot|pre", s)
+
+
+def _pick_fo_release():
+    """Ищет последний RELEASE Fabulously Optimized на официальном GitHub.
+
+    Возвращает dict: tag, version, mc_versions, url, name, direct_url.
+    Только release-версии: prerelease=False, draft отброшен, плюс фильтр
+    по имени тега (v14.1.0 годится, v15.0.0-alpha.5 / beta — нет).
+    """
+    releases = _http_get_json(f"{FO_GITHUB_API}?per_page=100", timeout=30)
+    best = None
+    for r in releases:
+        if r.get("draft") or r.get("prerelease"):
+            continue
+        tag = r.get("tag_name", "")
+        if not _fo_is_release(tag):
+            continue
+        asset = next((a for a in r.get("assets", [])
+                      if a["name"].endswith(".mrpack") and _fo_is_release(a["name"])), None)
+        if not asset:
+            continue
+        cand = {
+            "tag": tag,
+            "version": tag.lstrip("v"),
+            "mc_versions": [],
+            "url": asset["browser_download_url"],
+            "name": asset["name"],
+            "size": asset.get("size", 0),
+        }
+        # сортировка по числовой части тега — берём самый свежий релиз
+        nums = [int(x) for x in re.findall(r"\d+", tag)]
+        key = tuple(nums + [0] * (6 - len(nums)))
+        cand["_key"] = key
+        if best is None or key > best["_key"]:
+            best = cand
+    if not best:
+        raise RuntimeError("На GitHub нет ни одной release-версии FO")
+    best.pop("_key")
+    return best
 
 
 def setup_fabulously_optimized():
     info(f"{BOLD}Скачивание Fabulously Optimized{RESET}")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    hint("Источник: официальный GitHub (только RELEASE, без alpha/beta)")
     try:
-        req = urllib.request.Request(MODRINTH_FO_API, headers={"User-Agent": "wine-installer/2.5"})
-        with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
-            versions = json.loads(r.read().decode())
+        rel = _pick_fo_release()
     except Exception as e:
-        debug.dbg_exc(e, "setup_fo/api")
-        err(f"Modrinth API: {e}")
+        debug.dbg_exc(e, "setup_fo/github")
+        err(f"GitHub API: {e}")
         return False
-    latest = None
-    for v in versions:
-        if v.get("version_type") == "release":
-            latest = v
-            break
-    if not latest:
-        err("Release-версия не найдена")
+    info(f"Release: {rel['tag']} ({rel['name']}, {rel['size'] // 1024} КБ)")
+    dest = WINE_DIR / rel["name"]
+    mirrors = [("GitHub (официально)", rel["url"])] + make_github_mirrors(rel["url"])
+    if not download_file(mirrors, dest, "Fabulously Optimized", min_size_mb=0):
+        err("Не удалось скачать .mrpack ни с одного зеркала")
         return False
-    mrpack_url = mrpack_name = mrpack_sha512 = None
-    for f in latest.get("files", []):
-        if f["filename"].endswith(".mrpack"):
-            mrpack_url = f["url"]
-            mrpack_name = f["filename"]
-            mrpack_sha512 = f.get("hashes", {}).get("sha512")
-            break
-    if not mrpack_url or not mrpack_name:
-        err(".mrpack не найден")
+    # проверка целостности по modrinth.index.json внутри архива
+    try:
+        with zipfile.ZipFile(dest, "r") as z:
+            m = json.loads(z.read("modrinth.index.json").decode("utf-8"))
+        deps = m.get("dependencies", {})
+        if not deps.get("minecraft"):
+            raise RuntimeError("нет версии minecraft в манифесте")
+    except Exception as e:
+        debug.dbg_exc(e, "setup_fo/validate")
+        err(f"Скачанный файл повреждён: {e}")
+        try:
+            dest.unlink()
+        except Exception:
+            pass
         return False
-    info(f"Версия {latest['version_number']} для MC {', '.join(latest.get('game_versions', ['?']))}")
-    dest = WINE_DIR / mrpack_name
-    if not download_file([("direct", mrpack_url)], dest, "Fabulously Optimized", min_size_mb=0):
-        return False
-    if mrpack_sha512:
-        info("Проверяю контрольную сумму...")
-        ok_hash, actual = verify_sha512(dest, mrpack_sha512)
-        if ok_hash:
-            ok("Хеш совпал")
-        else:
-            err("Хеш НЕ совпал!")
-            hint("Файл повреждён. Удали и скачай заново.")
-            return False
     ok(f"Скачано: {dest}")
 
-    game_dir = Path(get_minecraft_game_path())
-    if not game_dir.exists():
-        warn("Папка game не найдена — Legacy Launcher ещё не создал структуру.")
+    # ── Куда ставить: ищем реальные .minecraft / game на системе ──
+    found = choose_minecraft_dir(auto=True)
+    if found is None:
+        warn("Папка .minecraft (или game у Legacy) не найдена на системе.")
         print()
-        info("Что нужно сделать:")
-        hint("1. Запусти Legacy Launcher (команда `legacy`)")
-        hint("2. В окне лаунчера выбери версию MC и нажми Установить")
-        hint("3. Дождись создания папки game/")
-        hint("4. Закрой лаунчер КРЕСТИКОМ (не Ctrl+C)")
-        hint("5. Вернись сюда и повтори `fo` или `minecraft → 3`")
-        print()
-        hint(f"Скачанный .mrpack лежит тут: {dest}")
-        return True
-
-    print(f"{BOLD}Куда распаковать?{RESET}")
-    print(f"  {CYAN}1{RESET}) В Legacy Launcher (game/)")
-    print(f"  {CYAN}2{RESET}) Только скачать, распакую сам")
-    try:
-        choice = input(f"{YELLOW}Выбор [1]: {RESET}").strip() or "1"
-    except (KeyboardInterrupt, EOFError):
-        return True
-    if choice == "1":
-        java_bin, java_home, _ = find_java()
-        if not java_bin:
-            warn("Java не найдена. Fabric installer требует Java.")
-            hint("Установи: install-java")
+        info("Варианты:")
+        hint("1. Запусти любой лаунчер (legacy / Prism) один раз — он создаст папку игры")
+        hint("2. Укажи путь вручную")
+        try:
+            manual = input(f"{YELLOW}Путь к .minecraft (Enter — отказаться): {RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            manual = ""
+        if manual and Path(manual).expanduser().is_dir():
+            found = Path(manual).expanduser()
+        elif manual:
+            err("Такой папки нет")
+        else:
+            hint(f"Скачанный .mrpack лежит тут: {dest}")
+            hint("Распакуешь позже сам или повтори `fo` после запуска лаунчера.")
             return True
-        unpack_mrpack_to_game(dest, game_dir, java_bin)
-        hint("Готово! Версия Fabric появится в Legacy Launcher")
-    else:
-        hint("Файл лежит: " + str(dest))
+    game_dir = Path(found)
+    (game_dir / "versions").mkdir(parents=True, exist_ok=True)
+    ok(f"Директория игры: {game_dir}")
+
+    java_bin, java_home, java_status = find_java()
+    if not java_bin:
+        warn("Java не найдена. Fabric installer требует Java.")
+        hint("Установи: install-java (пункт 6 этого меню)")
+        hint(f".mrpack уже скачан: {dest}")
+        return True
+    info(f"Java: {java_bin}")
+    unpack_mrpack_to_game(dest, game_dir, java_bin)
+    hint("Готово! Версия Fabric появится в лаунчере")
     return True
 
 
 # ═══════════════════════════════════════════════════════════════════
 #  OPTIFINE
 # ═══════════════════════════════════════════════════════════════════
+
+def _optifine_versions_from_html(html):
+    """[(mc_ver, opti_ver), ...] в порядке страницы (свежие сверху)."""
+    out = []
+    seen = set()
+    for m in re.finditer(r'OptiFine_(\d+\.\d+(?:\.\d+)?)_HD_U_([A-Z]\w+)\.jar', html):
+        key = (m.group(1), m.group(2))
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
 
 def setup_optifine():
     info(f"{BOLD}Скачивание OptiFine{RESET}")
@@ -535,18 +714,89 @@ def setup_optifine():
         debug.dbg_exc(e, "setup_optifine/page")
         err(f"Страница: {e}")
         return False
-    match = re.search(r'OptiFine_(\d+\.\d+(?:\.\d+)?)_HD_U_([A-Z]\d+)\.jar', html)
-    if not match:
-        err("Версия OptiFine не найдена")
+    versions = _optifine_versions_from_html(html)
+    if not versions:
+        err("На странице OptiFine не найдено ни одной версии")
+        hint("Возможно, сайт отдал заглушку/антибот. Попробуй позже.")
         return False
-    mc_ver = match.group(1)
-    opti_ver = match.group(2)
+
+    # ── Куда ставить: ищем реальные .minecraft / game на системе ──
+    found = choose_minecraft_dir(auto=True)
+    if found is None:
+        warn("Папка .minecraft (или game у Legacy) не найдена на системе.")
+        try:
+            manual = input(f"{YELLOW}Путь к .minecraft (Enter — отказаться): {RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            manual = ""
+        if manual and Path(manual).expanduser().is_dir():
+            found = Path(manual).expanduser()
+        else:
+            if manual:
+                err("Такой папки нет")
+            hint("Запусти сначала любой лаунчер — он создаст папку игры.")
+            return False
+    game_dir = Path(found)
+    ok(f"Директория игры: {game_dir}")
+
+    # ── Подбор версии под уже установленные в games/versions ──
+    installed = []
+    vdir = game_dir / "versions"
+    if vdir.is_dir():
+        installed = sorted((d.name for d in vdir.iterdir() if d.is_dir()), reverse=True)
+    mc_in_installed = []
+    for name in installed:
+        for m in re.finditer(r"(\d+\.\d+(?:\.\d+)?)", name):
+            if m.group(1) not in mc_in_installed:
+                mc_in_installed.append(m.group(1))
+    pick = None
+    for mc_ver, opti_ver in versions:              # свежие релизы OptiFine сверху
+        if mc_ver in mc_in_installed:
+            pick = (mc_ver, opti_ver)
+            break
+    if pick:
+        info(f"Подобрал версию под установленную в игре: MC {pick[0]}")
+    else:
+        pick = versions[0]
+        if installed:
+            warn("Точного совпадения с версиями в games/versions нет — беру свежий OptiFine")
+        info(f"MC {pick[0]}, OptiFine HD U {pick[1]}")
+        try:
+            ans = input(f"{YELLOW}Сменить версию? [y/N]: {RESET}").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            ans = "n"
+        if ans in ("y", "д", "да"):
+            print("Доступные (первые 15):")
+            shown = versions[:15]
+            for i, (mv, ov) in enumerate(shown, 1):
+                print(f"  {CYAN}{i}{RESET}) MC {mv}, HD U {ov}")
+            try:
+                c = int(input("Номер: ").strip()) - 1
+                if 0 <= c < len(shown):
+                    pick = shown[c]
+            except (ValueError, IndexError, KeyboardInterrupt, EOFError):
+                pass
+    mc_ver, opti_ver = pick
     fname = f"OptiFine_{mc_ver}_HD_U_{opti_ver}.jar"
     url = f"http://optifine.net/adloadx?f={fname}"
-    info(f"MC {mc_ver}, OptiFine HD U {opti_ver}")
     dest = WINE_DIR / fname
     if not download_file([("direct", url)], dest, "OptiFine", min_size_mb=0):
         err("Не удалось скачать")
+        return False
+    # скачанный "jar" с adloadx иногда оказывается HTML-заглушкой
+    head = b""
+    try:
+        with open(dest, "rb") as f:
+            head = f.read(4)
+    except Exception:
+        pass
+    if head != b"PK\x03\x04":
+        err("Скачался не JAR (похоже на страницу-заглушку optifine.net)")
+        hint("Открой браузером https://optifine.net/downloads, скачай вручную,")
+        hint(f"положи файл в {WINE_DIR} и повтори команду — файл уже будет там.")
+        try:
+            dest.unlink()
+        except Exception:
+            pass
         return False
     ok(f"Скачано: {dest}")
     java_bin, java_home, java_status = find_java()
@@ -568,7 +818,7 @@ def setup_optifine():
         err("Java не найдена")
         return False
     ok(f"Java: {java_home or java_bin} ({java_status})")
-    game_path = get_minecraft_game_path()
+    game_path = str(game_dir)
     clipboard_ok = copy_to_clipboard(game_path)
     info("Запускаю установщик OptiFine...")
     print()
@@ -581,10 +831,34 @@ def setup_optifine():
     print()
     try:
         subprocess.run([java_bin, "-jar", str(dest)], check=False)
+    except FileNotFoundError:
+        err("Не запустить: битый путь к Java. Установи заново: install-java")
+        return False
     except Exception as e:
         debug.dbg_exc(e, "setup_optifine/run")
         err(f"Не запустить: {e}")
         return False
+
+    # ── Проверяем результат и добираем недостающее ──
+    of_vdir = game_dir / "versions" / f"OptiFine_{mc_ver}"
+    of_json = game_dir / "versions" / f"OptiFine_{mc_ver}_HD_U_{opti_ver}" / \
+        f"OptiFine_{mc_ver}_HD_U_{opti_ver}.json"
+    created = [p for p in (of_vdir, of_json) if p.exists()]
+    # установщик мог создать профиль с другим именем — ищем любой новый OptiFine json
+    if not created:
+        cand = list((game_dir / "versions").glob("OptiFine*/*.json")) if (game_dir / "versions").is_dir() else []
+        if cand:
+            created = cand
+    if created:
+        prof_path = Path(created[-1]) if isinstance(created[-1], Path) else None
+        ok(f"OptiFine установлен: {prof_path.parent.name if prof_path else 'профиль создан'}")
+        version_id = prof_path.stem if prof_path else f"OptiFine_{mc_ver}_HD_U_{opti_ver}"
+        finish_version_install(game_dir, mc_ver, version_id)
+        hint("Готово! Выбери эту версию в лаунчере")
+    else:
+        warn("Похоже, установка в окне OptiFine не завершилась (профиль не создан).")
+        hint("Запусти установщик ещё раз и в поле Folder вставь путь выше;")
+        hint("кнопка Install должна сказать 'OptiFine is installed successfully'.")
     return True
 
 

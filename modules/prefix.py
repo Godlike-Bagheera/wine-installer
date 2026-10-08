@@ -8,7 +8,7 @@ from modules import debug
 from modules.colors import ok, info, err, BOLD, RESET
 from modules.config import (
     WINE_PREFIX, WINE_BIN, DXVK_DIR, DXVK_OVERRIDES,
-    PREFIXES_DIR, USE_PER_GAME_PREFIX,
+    PREFIXES_DIR, USE_PER_GAME_PREFIX, HOME, DEFAULT_PREFIX,
     USE_DXVK_HUD, USE_MANGOHUD,
 )
 
@@ -80,6 +80,131 @@ def get_minecraft_game_path():
     )
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  ПОИСК .minecraft (реальные директории игры на системе)
+# ═══════════════════════════════════════════════════════════════════
+
+_MC_MARKERS = ("versions", "assets", "libraries")
+
+
+def _looks_like_mc_dir(p):
+    """Папка похожа на директорию Minecraft: называется .minecraft/ game/
+    и содержит хотя бы один маркер (versions/assets/libraries), либо в ней
+    есть versions/ c json-профилями."""
+    try:
+        if not p.is_dir():
+            return False
+        names = {p.name.lower(), (p.parent.name + "/" + p.name).lower()}
+        marker_ok = any((p / m).is_dir() for m in _MC_MARKERS)
+        named_ok = (
+            p.name.lower() == ".minecraft"
+            or "minecraft" in p.name.lower()
+            or "minecraft/game" in " ".join(names)
+            or p.name.lower() == "game" and p.parent.name.lower() in (".tlauncher", "legacy", "minecraft")
+        )
+        if not (marker_ok or named_ok):
+            return False
+        # если названа как mc, но маркеров нет — всё равно годится (свежий install)
+        return True
+    except Exception:
+        return False
+
+
+def find_minecraft_dirs(limit=12):
+    """Ищет папки .minecraft (и аналоги Legacy/Prism) по типичным местам:
+    HOME, Roaming-префиксы Wine. Возвращает список Path, отсортированный:
+    сначала папки с непустым versions/, затем остальные."""
+    candidates = []
+
+    def add(p):
+        try:
+            p = Path(p)
+            rp = str(p.resolve())
+            if _looks_like_mc_dir(p) and rp not in seen:
+                seen.add(rp)
+                candidates.append(p)
+        except Exception:
+            pass
+
+    seen = set()
+
+    # 1) Прямые типовые пути
+    direct = [
+        HOME / ".minecraft",
+        WINE_PREFIX / "drive_c" / "users" / "stud" / ".minecraft",
+        WINE_PREFIX / "drive_c" / "users" / "stud" / "AppData" / "Roaming" / ".minecraft",
+        WINE_PREFIX / "drive_c" / "users" / "stud" / "AppData" / "Roaming" / ".tlauncher" / "legacy" / "Minecraft" / "game",
+        Path("/root/.minecraft"),
+    ]
+    for d in direct:
+        add(d)
+
+    # 2) Все префиксы wine-portable/prefixes/*/drive_c/users/<user>/...
+    try:
+        for pref in [DEFAULT_PREFIX, *PREFIXES_DIR.glob("*")]:
+            users_dir = pref / "drive_c" / "users"
+            if not users_dir.is_dir():
+                continue
+            for user in users_dir.iterdir():
+                add(user / ".minecraft")
+                add(user / "AppData" / "Roaming" / ".minecraft")
+                add(user / "AppData" / "Roaming" / ".tlauncher" / "legacy" / "Minecraft" / "game")
+    except Exception:
+        pass
+
+    # 3) Ограниченный обход HOME глубиной 3 на предмет папок .minecraft
+    try:
+        skip = {"wine-portable", ".cache", ".local", ".config", ".git",
+                "node_modules", "__pycache__", ".mozilla", ".thunderbird",
+                ".steam", ".var", ".npm", ".cargo", ".rustup", "snap", "flatpak"}
+        for a in HOME.iterdir():
+            try:
+                if not a.is_dir() or a.name in skip or a.name.startswith("."):
+                    continue
+                add(a / ".minecraft")
+                for b in a.iterdir():
+                    try:
+                        if b.is_dir() and b.name.lower() == ".minecraft":
+                            add(b)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    def score(p):
+        try:
+            vdir = p / "versions"
+            n = len([d for d in vdir.iterdir() if d.is_dir()]) if vdir.is_dir() else -1
+        except Exception:
+            n = -1
+        return (-n, str(p))
+
+    candidates.sort(key=score)
+    return candidates[:limit]
+
+
+def choose_minecraft_dir(auto=True):
+    """Возвращает выбранную директорию игры (Path) или None.
+    Если найдена одна — использует её; если несколько — спрашивает."""
+    found = find_minecraft_dirs()
+    if not found:
+        return None
+    if len(found) == 1 or auto:
+        if len(found) > 1:
+            info(f"Найдено несколько директорий игры, беру первую: {found[0]}")
+        return found[0]
+    print(f"{BOLD}Найдено несколько папок Minecraft:{RESET}")
+    for i, p in enumerate(found, 1):
+        print(f"  {i}) {p}")
+    try:
+        choice = input("Выбор [1]: ").strip() or "1"
+        return found[int(choice) - 1]
+    except (ValueError, IndexError, KeyboardInterrupt, EOFError):
+        return found[0]
+
+
 def show_minecraft_paths():
     from modules.colors import CYAN
     game_linux = get_minecraft_game_path()
@@ -89,4 +214,11 @@ def show_minecraft_paths():
     print(f"    {CYAN}{game_linux}{RESET}")
     print("  Windows (для .exe):")
     print(f"    {CYAN}{game_win}{RESET}")
+    found = find_minecraft_dirs()
+    if found:
+        print("  Найденные реальные папки игры:")
+        for p in found:
+            print(f"    {CYAN}{p}{RESET}")
+    else:
+        print("  Папки .minecraft на системе не найдены.")
     print()
