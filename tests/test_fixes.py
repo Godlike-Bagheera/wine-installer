@@ -79,8 +79,6 @@ with zipfile.ZipFile(zip_path, "w") as z:
                json.dumps({"overrides": {"java": {"net.fabricmc.fabric-loader": "0.16.9"}}}))
     z.writestr("manifest.json", json.dumps({"manifestVersion": "2", "minecraftVersion": "1.21.5"}))
 
-# перехватываем сеть: install_fabric_profile/finish_version_install не дёрнем без сети —
-# они вызываются только при loader_version; сделаем их заглушками
 called = {}
 mc.install_fabric_profile = lambda gd, mcv, lv: called.update(profile=(mcv, lv)) or True
 mc.finish_version_install = lambda gd, mcv, vid: called.update(finish=(mcv, vid)) or True
