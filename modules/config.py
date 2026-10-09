@@ -294,7 +294,7 @@ def _short_github_form(url):
     Встречается в конфигах модпаков; раньше не поддерживалась вовсе.
     Возвращает канонический URL releases/download или None.
     """
-    m = re.search(r"(?:^|[/:.])g(?:h|it)\.io/github\.(?:io|com)/"
+    m = re.search(r"(?:^|[/:.])g(?:h|it)\.io/(?:github\.(?:io|com)/)?"
                   r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)@([^/?#]+)/([^?#]+)", url)
     if not m:
         m = re.search(r"github\.(?:io|com)/([A-Za-z0-9_.-]+)/"

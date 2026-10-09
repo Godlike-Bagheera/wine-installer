@@ -92,6 +92,10 @@ check("огрызок удалён в finally даже при исключени
 def fake_good(mirrors, dest, label, min_size_mb=0, silent=False):
     with zipfile.ZipFile(Path(dest), "w") as z:
         z.writestr("shaders/main.fsh", "void main(){}")
+        # padding: _download_to_temp отбраковывает огрызки < min_bytes (1 KiB),
+        # а минимальный валидный zip весит ~143 байта — доводим размер до
+        # «настоящей» закачки, как это сделал бы реальный шейдер-пак.
+        z.writestr("padding.bin", b"P" * 2048)
     return True
 
 
