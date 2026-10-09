@@ -82,9 +82,25 @@ def find_disk_d():
             except OSError:
                 continue
 
-    # 3) Домашняя папка
+    # 3) Домашняя папка и подпапки рабочего стола (в т.ч. «Мой диск D» и т.п.)
     add(HOME / "Диск D")
     add(HOME / "disk_d")
+    for desk in DESKTOP_DIRS:
+        if not desk.is_dir():
+            continue
+        try:
+            for f in desk.iterdir():
+                try:
+                    if not f.is_dir():
+                        continue
+                    n = f.name.lower().replace(" ", "").replace("_", "")
+                    if ("дискd" in n or "diskd" in n or "discd" in n) and \
+                       f.name.lower().strip() not in _D_LABELS:
+                        add(f)
+                except OSError:
+                    continue
+        except OSError:
+            pass
 
     # Отбрасываем заведомо неподписанные сетевые шары вида mnt/... без метки D
     for c in candidates:

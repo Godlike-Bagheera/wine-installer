@@ -1,14 +1,1 @@
-# Python cache files
-__pycache__/
-*.pyc
-*.pyo
-
-# Ruff / tooling caches
-.ruff_cache/
-.pytest_cache/
-
-# Local artifacts (wine prefix, logs, settings)
-wine-portable/
-logs/
-settings.json
-.env
+(empty)
