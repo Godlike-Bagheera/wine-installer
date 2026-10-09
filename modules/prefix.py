@@ -85,14 +85,32 @@ def get_minecraft_game_path():
 # ═══════════════════════════════════════════════════════════════════
 
 _MC_MARKERS = ("versions", "assets", "libraries")
+# Папки с бэкапами миров (см. modules/worlds.py): их содержимое — копии
+# реальных директорий игры, сами по себе игровыми каталогами не являются.
+_MC_BACKUP_MARKER = "minecraft-worlds"
+
+
+def _in_worlds_backup(p):
+    """True, если путь лежит внутри папки-бэкапа миров «minecraft-worlds».
+
+    Иначе find_minecraft_dirs() принимает скопированные вместе с мирами
+    версии/ за настоящую директуру игры (проблема: saveworlds начинает
+    копировать бэкап сам в себя, а loadworlds грузит миры в бэкап)."""
+    try:
+        parts = [x.lower() for x in Path(p).resolve().parts]
+    except OSError:
+        parts = [x.lower() for x in Path(p).parts]
+    return _MC_BACKUP_MARKER in parts
 
 
 def _looks_like_mc_dir(p):
     """Папка похожа на директорию Minecraft: называется .minecraft/ game/
     и содержит хотя бы один маркер (versions/assets/libraries), либо в ней
-    есть versions/ c json-профилями."""
+    есть versions/ c json-профилями. Пути внутри бэкапа миров отбрасываются."""
     try:
         if not p.is_dir():
+            return False
+        if _in_worlds_backup(p):
             return False
         names = {p.name.lower(), (p.parent.name + "/" + p.name).lower()}
         marker_ok = any((p / m).is_dir() for m in _MC_MARKERS)
