@@ -6,7 +6,6 @@
 поэтому перед копированием проверяется возможность записи; при неудаче
 предлагается выбрать другой путь вручную.
 """
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +16,10 @@ from modules.config import HOME, DESKTOP_DIRS
 from modules.prefix import find_minecraft_dirs
 
 # Имена «Диска D», которые встречаются в RED OS / Windows-сборках
-_D_LABELS = {"диск d", "диск_d", "disc d", "disk d", "d", "локальный диск (d)",
-             "local disk (d)", "new volume", "data"}
+# ВАЖНО: варианты с кириллической «Д» («диск д», «диск_д») обязательны —
+# путь пользователя может быть, например, «Рабочий стол/Диск Д».
+_D_LABELS = {"диск d", "диск_d", "диск д", "диск_д", "disc d", "disk d",
+             "d", "локальный диск (d)", "local disk (d)", "new volume", "data"}
 # Папки с мирами в разных директориях игры
 _WORLD_DIRS = ("saves", "worlds")
 _SKIP_DIRS = {"$recycle.bin", "system volume information", ".Trash-info",
@@ -44,7 +45,9 @@ def find_disk_d():
         if not desk.is_dir():
             continue
         add(desk / "Диск D")
+        add(desk / "Диск Д")   # кириллическая «Д» — как у пользователя в RED OS
         add(desk / "Диск_D")
+        add(desk / "Диск_Д")
         add(desk / "Disk D")
         add(desk / "D")
         try:
@@ -84,12 +87,13 @@ def find_disk_d():
 
     # 3) Домашняя папка
     add(HOME / "Диск D")
+    add(HOME / "Диск Д")   # кириллическая «Д»
     add(HOME / "disk_d")
 
-    # Отбрасываем заведомо неподписанные сетевые шары вида mnt/... без метки D
-    for c in candidates:
-        if _can_write(c):
-            return c
+    # Избегаем read-only сетевых папок (mnt и т.п.): сначала проверяем запись.
+    writable = [c for c in candidates if _can_write(c)]
+    if writable:
+        return writable[0]
     # Никуда нельзя писать — вернём первый кандидат (пользователь сам разберётся)
     return candidates[0] if candidates else None
 
@@ -244,14 +248,18 @@ def cmd_load_worlds():
     if not backup.is_dir():
         err(f"На диске нет папки {backup}. Сначала выполни saveworlds.")
         return
-    # Собираем миры со всех подпапок backups
-    found = {}  # world_name -> (src_path, size)
+    # Собираем миры со всех подпапок backups (только верхний уровень мира,
+    # внутрь уже найденного мира не ныряем)
+    found = {}  # world_name -> src_path
     for sub in backup.rglob("*"):
         try:
-            if sub.is_dir() and ((sub / "level.dat").exists() or (sub / "region").is_dir()):
-                # не ныряем внутрь уже найденного мира
-                if not any(str(sub).startswith(str(w) + os.sep) for w in found):
-                    found[sub.name] = sub
+            if not sub.is_dir():
+                continue
+            if not ((sub / "level.dat").exists() or (sub / "region").is_dir()):
+                continue
+            if any(sub.is_relative_to(w) for w in found.values()):
+                continue
+            found[sub.name] = sub
         except OSError:
             continue
     if not found:

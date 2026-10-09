@@ -31,6 +31,8 @@ from modules.commands import (
 from modules.winetricks import cmd_fonts, download_winetricks
 from modules.gamemode import cmd_gamemode
 from modules.worlds import cmd_save_worlds, cmd_load_worlds, cmd_worlds_menu
+from modules.shaders import cmd_shaders
+from modules import background
 from modules.prefix import get_wine_env
 from modules.wine import (
     download_wine, download_dxvk, create_runexe,
@@ -78,27 +80,34 @@ def _setup_readline():
 
 
 def print_help():
-    print(f"{BOLD}╔══════════════════════════════════════════════════╗")
-    print(f"║  Команды v{CURRENT_VERSION}                                  ║")
-    print(f"╚══════════════════════════════════════════════════╝{RESET}")
-    print(f"{BOLD}🎮 Игры:{RESET}")
-    print(f"  {CYAN}<имя.exe>{RESET}         — запустить игру")
+    line = "─" * 52
+    print(f"{BOLD}{line}{RESET}")
+    print(f"{BOLD}  Команды v{CURRENT_VERSION}{RESET}")
+    print(f"{BOLD}{line}{RESET}")
+    print(f"{BOLD}Игры:{RESET}")
+    print(f"  {CYAN}<имя.exe>{RESET}         — запустить игру (фоновый режим)")
     print(f"  {CYAN}<номер>{RESET}             — из истории")
     print(f"  {CYAN}!!{RESET}                  — последнюю игру")
     print(f"  {CYAN}desktop <имя.exe>{RESET}  — ярлык на рабочем столе")
     print(f"  {CYAN}download <URL>{RESET}     — скачать/распаковать архив")
-    print(f"{BOLD}⛏  Minecraft:{RESET}")
+    print(f"{BOLD}Фоновый режим:{RESET}")
+    print(f"  {CYAN}gamestatus{RESET}          — статус запущенных игр")
+    print(f"  {CYAN}games{RESET}               — список активных игр")
+    print(f"  {CYAN}stopgame{RESET}           — остановить все игры")
+    print(f"  {CYAN}waitgame{RESET}           — дождаться завершения игр")
+    print(f"{BOLD}Minecraft:{RESET}")
     print(f"  {CYAN}minecraft{RESET}            — меню (все варианты)")
     print(f"  {CYAN}fo{RESET}                   — Fabulously Optimized")
     print(f"  {CYAN}optifine{RESET}             — OptiFine")
     print(f"  {CYAN}prism{RESET}                — Prism Launcher")
     print(f"  {CYAN}legacy{RESET}               — Legacy Launcher")
+    print(f"  {CYAN}shaders{RESET}             — установить шейдер-пак")
     print(f"  {CYAN}install-java{RESET}         — портативная JDK 17")
-    print(f"{BOLD}💾 Миры (Диск D, RED OS):{RESET}")
-    print(f"  {CYAN}worlds{RESET}              — меню миров (диск D)")
+    print(f"{BOLD}Миры (Диск D, RED OS):{RESET}")
+    print(f"  {CYAN}worlds / миры{RESET}        — меню миров (диск D)")
     print(f"  {CYAN}saveworlds{RESET}          — сохранить миры на Диск D")
     print(f"  {CYAN}loadworlds{RESET}          — загрузить миры с Диска D")
-    print(f"{BOLD}🔧 Утилиты:{RESET}")
+    print(f"{BOLD}Утилиты:{RESET}")
     print(f"  {CYAN}fonts{RESET}               — corefonts")
     print(f"  {CYAN}steamfix <имя.exe>{RESET} — заглушка steam_api.dll")
     print(f"  {CYAN}gamemode{RESET}            — GameMode вкл/выкл")
@@ -108,22 +117,21 @@ def print_help():
     print(f"  {CYAN}dxvk{RESET}                — только DXVK")
     print(f"  {CYAN}reset{RESET}               — удалить префикс")
     print(f"  {CYAN}bin{RESET}                 — содержимое bin/")
-    print(f"{BOLD}⚙  Настройки:{RESET}")
+    print(f"{BOLD}Настройки:{RESET}")
     print(f"  {CYAN}settings{RESET}            — показать")
     print(f"  {CYAN}settings quiet|gamemode|debug on|off{RESET}")
     print(f"  {CYAN}quiet{RESET}               — тихий режим")
-    print(f"{BOLD}🐛 Отладка:{RESET}")
+    print(f"{BOLD}Отладка:{RESET}")
     print(f"  {CYAN}debug{RESET}               — статус")
     print(f"  {CYAN}debug on|off{RESET}       — вкл/выкл")
     print(f"  {CYAN}debugreport{RESET}         — архив логов")
-    print(f"{BOLD}📜 Прочее:{RESET}")
+    print(f"{BOLD}Прочее:{RESET}")
     print(f"  {CYAN}history{RESET}, {CYAN}log{RESET}         — история / последний лог")
-    print(f"  {CYAN}help{RESET}, {CYAN}?{RESET}             — эта справка")
-    print(f"  {CYAN}exit{RESET}, {CYAN}q{RESET}             — выход")
-    print(f"{BOLD}📦 Дополнительно:{RESET}")
     print(f"  {CYAN}export{RESET}              — экспорт истории и настроек")
     print(f"  {CYAN}gpu-temp{RESET}            — температура и загрузка GPU")
     print(f"  {CYAN}freegames{RESET}           — каталог бесплатных игр")
+    print(f"  {CYAN}help{RESET}, {CYAN}?{RESET}             — эта справка")
+    print(f"  {CYAN}exit{RESET}, {CYAN}q{RESET}             — выход")
     print()
 
 
