@@ -183,7 +183,6 @@ def pick_target_mc():
 
 def fetch_modrinth_shaders(query="shader"):
     """Список [{name, downloads, desc, files:[urls]}] или [] при ошибке сети."""
-    import urllib.request
     url = MODRINTH_SEARCH.format(query=query)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.6"})
@@ -562,17 +561,21 @@ def cmd_shaders(arg=""):
         err("Каталог пуст (ни сеть, ни офлайн-список не помогли).")
         return True
     print(f"\n{BOLD}Доступные шейдер-паки:{RESET}")
+    pub_n = len(packs) + 1
     for i, (name, meta) in enumerate(packs, 1):
         dl = f"  {meta['downloads']:,} загрузок".replace(",", " ") if meta.get("downloads") else ""
         print(f"  {CYAN}{i}{RESET}) {name}{dl}")
         if meta.get("desc"):
             print(f"      {meta['desc']}")
+    print(f"  {CYAN}{pub_n}{RESET}) Опубликовать свой шейдер-пак на GitHub")
     print(f"  {CYAN}0{RESET}) Отмена")
     try:
         choice = input(f"{YELLOW}Номер пака: {RESET}").strip()
     except (KeyboardInterrupt, EOFError):
         print()
         return True
+    if choice == str(pub_n):
+        return cmd_publish_shader()
     if not choice.isdigit() or not (1 <= int(choice) <= len(packs)):
         warn("Отменено.")
         return True

@@ -134,7 +134,7 @@ _orig = {
 }
 ui.cmd_game_status = lambda: called.update(fn="cmd_game_status")
 ui.cmd_games_list = lambda: called.update(fn="cmd_games_list")
-ui.cmd_shaders = lambda: called.update(fn="cmd_shaders")
+ui.cmd_shaders = lambda arg="": called.update(fn="cmd_shaders", arg=arg)
 ui.cmd_stopgame = lambda arg="": called.update(fn="cmd_stopgame", arg=arg)
 ui.cmd_waitgame = lambda arg="": called.update(fn="cmd_waitgame", arg=arg)
 try:
@@ -148,6 +148,8 @@ try:
         ("стопигра mine", "cmd_stopgame", "mine"),
         ("waitgame mine", "cmd_waitgame", "mine"),
         ("ждатьигру game#2", "cmd_waitgame", "game#2"),
+        ("опубликовать", "cmd_shaders", "publish"),
+        ("shaders publish", "cmd_shaders", "publish"),
     ]:
         called.clear()
         last, cont = ui.process_input(inp, None)

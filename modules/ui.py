@@ -105,6 +105,7 @@ def print_help():
     print(f"  {CYAN}legacy{RESET}               — Legacy Launcher")
     print(f"  {CYAN}shaders{RESET}              — установить шейдер-пак (shaderpacks)")
     print(f"  {CYAN}shaders <URL>{RESET}       — пак по прямой ссылке (.zip)")
+    print(f"  {CYAN}shaders publish{RESET}      — опубликовать свой пак на GitHub")
     print(f"  {CYAN}опубликовать{RESET}        — опубликовать свой пак на GitHub")
     print(f"  {CYAN}install-java{RESET}         — портативная JDK 17")
     print(f"{BOLD}── Миры (Диск D, RED OS) ─────────────────────────{RESET}")
@@ -235,7 +236,8 @@ def process_input(name, last_exe):
         "опубликовать", "опубликовать на github",
     ) or (
         (low.startswith("gamestatus") or low.startswith("stopgame") or
-         low.startswith("waitgame") or low.replace(" ", "").startswith("остановитьигру") or
+         low.startswith("waitgame") or low.startswith("shaders") or
+         low.replace(" ", "").startswith("остановитьигру") or
          low.replace(" ", "").startswith("стопигра") or
          low.replace(" ", "").startswith("ждатьигру")) and not name.startswith("/")
     ):
