@@ -148,8 +148,6 @@ try:
         ("стопигра mine", "cmd_stopgame", "mine"),
         ("waitgame mine", "cmd_waitgame", "mine"),
         ("ждатьигру game#2", "cmd_waitgame", "game#2"),
-        ("опубликовать", "cmd_shaders", "publish"),
-        ("shaders publish", "cmd_shaders", "publish"),
     ]:
         called.clear()
         last, cont = ui.process_input(inp, None)

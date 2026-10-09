@@ -1330,7 +1330,6 @@ def cmd_minecraft():
         print(f"  {CYAN}7{RESET}) Автофикс игры (проверка + починка ошибок)")
         print(f"  {CYAN}8{RESET}) Миры → Диск D / ← Диск D (RED OS)")
         print(f"  {CYAN}9{RESET}) Установить шейдеры (shaderpacks)")
-        print(f"  {CYAN}10{RESET}) Опубликовать свой шейдер-пак на GitHub")
         print(f"  {CYAN}0{RESET}) Назад")
         try:
             choice = input(f"{YELLOW}Выбор: {RESET}").strip()
@@ -1358,9 +1357,6 @@ def cmd_minecraft():
         elif choice == "9":
             from modules.shaders import cmd_shaders
             cmd_shaders()
-        elif choice == "10":
-            from modules.shaders import cmd_publish_shader
-            cmd_publish_shader()
         elif choice == "0":
             return
         else:

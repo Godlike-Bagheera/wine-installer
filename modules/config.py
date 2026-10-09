@@ -111,7 +111,6 @@ EXPECTED_COMMANDS = [
     "export", "gpu-temp", "freegames",
     "worlds", "saveworlds", "loadworlds",
     "gamestatus", "stopgame", "waitgame", "games", "shaders",
-    "опубликовать",
 ]
 
 # ---------- SYSTEM TRUSTSTORE ДЛЯ JAVA ----------
