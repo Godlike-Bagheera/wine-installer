@@ -110,6 +110,8 @@ EXPECTED_COMMANDS = [
     "fo", "optifine", "prism", "legacy",
     "export", "gpu-temp", "freegames",
     "worlds", "saveworlds", "loadworlds",
+    "gamestatus", "stopgame", "waitgame", "games", "shaders",
+    "опубликовать",
 ]
 
 # ---------- SYSTEM TRUSTSTORE ДЛЯ JAVA ----------
