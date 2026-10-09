@@ -75,6 +75,20 @@ def _ssl_ctx():
 #  Определение версии Minecraft (запущенная / последняя установленная)
 # ─────────────────────────────────────────────────────────────────────
 
+def _extract_mc_version(line):
+    """Версия Minecraft из путей вида versions/1.xx.x/ в строке запуска.
+
+    Ищет самое длинное совпадение — иначе жадный regex может взять
+    '1.0' вместо '1.20.1'. Возвращает str или None.
+    """
+    best = None
+    for m in re.finditer(r"versions[/\\](1[.\w\-+]*\d)[/\\]", line):
+        v = m.group(1)
+        if best is None or len(v) > len(best):
+            best = v
+    return best
+
+
 def detect_running_mc_version():
     """Ищет запущенный процесс Minecraft (java с -cp ... или wine).
 
@@ -89,6 +103,15 @@ def detect_running_mc_version():
             if "minecraft" in low or "tlauncher" in low or "prism" in low:
                 result["running"] = True
                 result["dir"] = _mc_dir_from_path(Path(g["path"]))
+                # Версия из путей вида versions/1.xx.x/ в имени/пути игры;
+                # если её нет — берём последнюю игранную из профилей папки.
+                ver = _extract_mc_version(name + " " + g["path"])
+                if not ver and result["dir"] is not None:
+                    vers = installed_mc_versions(result["dir"])
+                    last = _last_played_version(result["dir"])
+                    ver = last if last in vers else (vers[0] if vers else None)
+                if ver:
+                    result["version"] = ver
                 break
     except Exception as e:
         debug.dbg(f"detect_running_mc gamestate: {e}")
@@ -103,18 +126,30 @@ def detect_running_mc_version():
         low = line.lower()
         if "minecraft" not in low and "tlauncher" not in low and ".minecraft" not in low:
             continue
-        if "grep " in low or "wine.py" in low or "shaders" in low:
+        # «shaders» убрано из фильтра: процесс игры с словом "shaders"
+        # в аргументах запуска (путь к shaderpacks, имя шейдер-пака)
+        # раньше отбрасывался — запущенная игра «не виделась».
+        if "grep " in low or "wine.py" in low:
             continue
         result["running"] = True
-        m = re.search(r"versions[/\\](1[.\w\-]+?)[/\\]", line)
-        if m and not result["version"]:
-            result["version"] = m.group(1)
+        # Версия игры из путей вида .../versions/1.xx.x/...
+        # (jar, natives, assetIndex в аргументах java/wine).
+        ver = _extract_mc_version(line)
+        if ver and not result["version"]:
+            result["version"] = ver
+        # Папка игры из аргументов лаунчера (--gameDir / --worldDir / userHome).
+        if result["dir"] is None:
+            gm = re.search(r"--gameDir[\s=]\"?([^\s\"]+)", line)
+            if gm:
+                gd = _mc_dir_from_path(Path(gm.group(1)).expanduser())
+                if gd is not None:
+                    result["dir"] = gd
         m2 = re.search(r"([^\s\"']*/\.minecraft)", line)
         if m2 and result["dir"] is None:
             d = Path(m2.group(1)).expanduser()
             if d.is_dir():
                 result["dir"] = d
-        if result["version"] or result["dir"]:
+        if result["version"] and result["dir"]:
             break
     return result
 
@@ -132,8 +167,67 @@ def _mc_dir_from_path(p):
     return None
 
 
+def _profile_version(data, sel):
+    """Версия Minecraft из launcher_profiles.json по выбранному профилю.
+
+    Vanilla/TLauncher: selectedProfile — id профиля в profiles{}, где
+    lastVersionId = версия (например "1.20.1").
+    PrismLauncher: selectedProfile — имя профиля, версия — lastUsedVersion.
+    Если по id не нашлось — возвращаем sel как есть (может быть самой версией).
+    """
+    def ver_of(p):
+        if isinstance(p, dict):
+            return p.get("lastVersionId") or p.get("lastUsedVersion")
+        return None
+
+    if isinstance(sel, str) and sel:
+        # TLauncher иногда пишет полный путь .../versions/1.20.1
+        m = re.search(r"versions[/\\](.+)$", sel.replace("\\", "/"))
+        if m:
+            return m.group(1)
+        prof = (data.get("profiles") or {}).get(sel)
+        v = ver_of(prof)
+        if v:
+            return v
+        # selectedProfile может быть и самой версией
+        if re.match(r"^1[.\d]", sel):
+            return sel
+    # без selectedProfile: последний профиль с известной версией
+    best = None  # (lastUsed, версия)
+    for prof in (data.get("profiles") or {}).values():
+        if isinstance(prof, dict):
+            v = ver_of(prof)
+            if v:
+                lu = prof.get("lastUsed") or ""
+                if best is None or lu > best[0]:
+                    best = (lu, v)
+    if best:
+        return best[1]
+    return None
+
+
+def _last_played_version(mc_dir):
+    """Последняя игранная версия из launcher_profiles.json.
+
+    Читает selectedProfile / lastVersionId (форматы разных лаунчеров).
+    Возвращает str или None. Надёжнее st_mtime папок versions/, который
+    меняется от любых операций с файлами.
+    """
+    try:
+        pf = Path(mc_dir) / "launcher_profiles.json"
+        if not pf.is_file():
+            return None
+        data = json.loads(pf.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError) as e:
+        debug.dbg(f"_last_played_version: {e}")
+        return None
+    if not isinstance(data, dict):
+        return None
+    return _profile_version(data, data.get("selectedProfile") or data.get("lastVersionId"))
+
+
 def installed_mc_versions(mc_dir):
-    """Версии из <mc>/versions (по дате modification — свежие сверху)."""
+    """Версии из <mc>/versions; последняя игранная — первая, далее свежие сверху."""
     versions = []
     try:
         vdir = Path(mc_dir) / "versions"
@@ -148,7 +242,14 @@ def installed_mc_versions(mc_dir):
     except OSError as e:
         debug.dbg(f"installed_mc_versions: {e}")
     versions.sort(reverse=True)
-    return [name for _, name in versions]
+    names = [name for _, name in versions]
+    # st_mtime ненадёжен (меняется от любых операций с файлами) —
+    # реально последнюю игранную версию ставим на первое место.
+    last = _last_played_version(mc_dir)
+    if last and last in names:
+        names.remove(last)
+        names.insert(0, last)
+    return names
 
 
 def pick_target_mc():
@@ -173,6 +274,12 @@ def pick_target_mc():
     vers = installed_mc_versions(best)
     if run.get("version"):
         return best, run["version"]
+    if run["running"]:
+        # Игра запущена, но версия не определилась из аргументов запуска —
+        # берём последнюю игранную (launcher_profiles.json), а не mtime.
+        last = _last_played_version(best)
+        if last and (not vers or last in vers):
+            return best, last
     return best, (vers[0] if vers else None)
 
 
@@ -250,10 +357,19 @@ def validate_shader_zip(path):
                 return False
             has_shader_files = any(n.endswith((".fsh", ".vsh", ".glsl", ".gsh"))
                                    for n in names)
-            has_pack_meta = any("shader" in n and n.endswith(".zip") or
+            # Resource-пак: pack.mcmeta + assets/, без единого шейдерного
+            # файла — обычный resource/texture-пак, а не шейдер-пак.
+            is_resource_pack = ("pack.mcmeta" in names and not has_shader_files and
+                                any(n.startswith("assets/") for n in names))
+            # Скобки обязательны: без них из-за приоритета and/or условие
+            # истинно для любого .zip с подстрокой "shader" в имени —
+            # обычные resource-паки проходили как шейдер-паки.
+            has_pack_meta = any(("shader" in n and n.endswith(".zip")) or
                                 n.endswith("shaders/") or "/shaders/" in n
                                 for n in names)
-            return has_shader_files or has_pack_meta
+            # Пак с папками/files «shaders», но без реальных шейдерных
+            # файлов (.fsh/.vsh/.glsl/.gsh), отсекается.
+            return (has_shader_files or has_pack_meta) and not is_resource_pack
     except (zipfile.BadZipFile, OSError) as e:
         debug.dbg(f"validate: {e}")
         return False
@@ -286,12 +402,24 @@ def _download_to_temp(url, fname):
     if not fname.lower().endswith(".zip"):
         fname += ".zip"
     dest_zip = tmp / fname
+    # Leftover от предыдущей (возможно, частичной) загрузки с тем же
+    # именем может устроить конфликт/пропуск — удаляем перед новой загрузкой.
+    if dest_zip.exists():
+        try:
+            dest_zip.unlink()
+        except OSError as e:
+            debug.dbg(f"_download_to_temp cleanup: {e}")
     mirrors = [("direct", url)]
     gh = make_github_mirrors(url)
     if gh:
         mirrors += gh
     if download_file(mirrors, dest_zip, fname, min_size_mb=0, silent=False):
         return dest_zip
+    # Неудача — не оставляем огрызок в кэше.
+    try:
+        dest_zip.unlink(missing_ok=True)
+    except OSError:
+        pass
     return None
 
 
@@ -311,6 +439,11 @@ def _install_from_url(name, url, shaderpacks_dir):
             pass
         hint("Файл удалён как невалидный. Попробуй другой пак.")
         return False
+    # Временный архив больше не нужен — убираем, чтобы не копился в кэше.
+    try:
+        dest_zip.unlink()
+    except OSError:
+        pass
     ok(f"Шейдер установлен: {installed}")
     return True
 
