@@ -6,7 +6,6 @@
 поэтому перед копированием проверяется возможность записи; при неудаче
 предлагается выбрать другой путь вручную.
 """
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +13,7 @@ from pathlib import Path
 from modules import debug
 from modules.colors import ok, info, warn, err, hint, CYAN, BOLD, YELLOW, RESET
 from modules.config import HOME, DESKTOP_DIRS
-from modules.prefix import find_minecraft_dirs
+from modules.prefix import find_minecraft_dirs, _in_worlds_backup
 
 # Имена «Диска D», которые встречаются в RED OS / Windows-сборках
 _D_LABELS = {"диск d", "диск_d", "disc d", "disk d", "d", "локальный диск (d)",
@@ -152,9 +151,15 @@ def choose_disk(auto=True):
 
 
 def get_saves_dirs():
-    """Все папки с мирами во всех найденных .minecraft. [(Path, метка), ...]."""
+    """Все папки с мирами во всех найденных .minecraft. [(Path, метка), ...].
+
+    Каталоги, лежащие внутри папки-бэкапа «minecraft-worlds», отбрасываются
+    (защита от самокопирования, когда Диск D расположен внутри HOME)."""
     result = []
     for mc in find_minecraft_dirs(limit=12):
+        if _in_worlds_backup(mc):          # страховка: бэкап — не игровая папка
+            debug.dbg(f"get_saves_dirs: пропускаю бэкап {mc}")
+            continue
         for wd in _WORLD_DIRS:
             w = mc / wd
             try:
@@ -163,6 +168,125 @@ def get_saves_dirs():
             except OSError:
                 continue
     return result
+
+
+def choose_saves_target(saves):
+    """Выбирает целевую папку saves[] при загрузке миров.
+
+    Если найдена одна папка — берётся она; если несколько лаунчеров —
+    пользователь выбирает сам (раньше миры всегда попадали в saves[0],
+    т.е. в первую попавшуюся игру)."""
+    if len(saves) == 1:
+        info(f"Целевая папка: {CYAN}{saves[0][0]}{RESET}")
+        return saves[0][0]
+    print(f"{BOLD}Найдено несколько папок с мирами. Куда загружать?{RESET}")
+    for i, (w, label) in enumerate(saves, 1):
+        print(f"  {i}) {CYAN}{w}{RESET}  ({label})")
+    try:
+        raw = input(f"{YELLOW}Выбор [1]: {RESET}").strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    if not raw:
+        idx = 0
+    else:
+        try:
+            idx = int(raw) - 1
+        except ValueError:
+            warn("Не удалось разобрать число — беру вариант 1.")
+            idx = 0
+    if not 0 <= idx < len(saves):
+        warn(f"Нет варианта {raw} — беру вариант 1.")
+        idx = 0
+    target = saves[idx][0]
+    info(f"Целевая папка: {CYAN}{target}{RESET}")
+    return target
+
+
+def _is_world_dir(p):
+    """Мир = папка с level.dat или region/."""
+    try:
+        return p.is_dir() and ((p / "level.dat").exists() or (p / "region").is_dir())
+    except OSError:
+        return False
+
+
+def _iter_backup_snapshots(backup):
+    """Снимки бэкапа по возрастанию «свежести»: сначала старые saves.bak-*,
+    последний элемент — актуальный saves/. Детерминированный порядок
+    (сортировка по mtime, затем по имени)."""
+    snaps = []
+    try:
+        for inst in sorted(backup.iterdir(), key=lambda x: x.name.lower()):
+            if not inst.is_dir():
+                continue
+            for d in inst.iterdir():
+                try:
+                    if not d.is_dir():
+                        continue
+                    dl = d.name.lower()
+                    if dl == "saves" or dl.startswith("saves.bak-") or dl in _WORLD_DIRS:
+                        snaps.append(d)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    snaps.sort(key=lambda d: (d.stat().st_mtime, d.name))
+    return snaps
+
+
+def _collect_backup_worlds(backup):
+    """Собирает миры из структуры бэкапа ЦЕЛЕВО (без rglob('*') по всему дереву):
+    обходятся только <inst>/saves[.bak-*]/<world> и <inst>/worlds/<world>.
+
+    Возвращает {путь_мира: имя_для_выгрузки}. Ни одна копия не теряется молча:
+    при коллизии имён самый свежий снимок сохраняет исходное имя (пользователь
+    получает ожидаемый 'New World' из актуального saves), а старые копии
+    переименовываются с меткой инстанта/снимка:
+    'New World [.minecraft-saves.bak-20240101-000000]'."""
+    # 1) все кандидаты (защита от вложенности: datapack-области DIM-1/DIM1
+    #    внутри уже принятого мира не считаются отдельными мирами)
+    candidates = []
+    for snap in _iter_backup_snapshots(backup):
+        taken = [w for w, _ in candidates]
+        try:
+            entries = sorted(snap.iterdir(), key=lambda x: x.name)
+        except OSError:
+            continue
+        for w in entries:
+            try:
+                if not _is_world_dir(w):
+                    continue
+                if any(prev in w.parents for prev in taken):
+                    debug.dbg(f"пропущен вложенный мир (datapack-область): {w}")
+                    continue
+                candidates.append((w, snap))
+            except OSError:
+                continue
+    # 2) имена для выгрузки: свежие снимки (saves/worlds) идут первыми и
+    #    занимают базовое имя; старые saves.bak-* получают суффикс-метку
+    def is_current(snap):
+        return snap.name.lower() in _WORLD_DIRS
+    ordered = ([c for c in candidates if is_current(c[1])] +
+               [c for c in candidates if not is_current(c[1])])
+    worlds = {}   # src_path -> display name
+    used = set()  # уже занятые имена выгрузки
+    for w, snap in ordered:
+        base = w.name
+        if base not in used:
+            name = base
+        else:
+            inst_tag = snap.parent.name
+            suffix = inst_tag if is_current(snap) else f"{inst_tag}-{snap.name}"
+            name = f"{base} [{suffix}]"
+            k = 2
+            while name in used:
+                name = f"{base} [{suffix}] #{k}"
+                k += 1
+            warn(f"Коллизия имён: '{base}' уже есть в более свежем снимке — "
+                 f"выгружу эту копию как '{name}'")
+        used.add(name)
+        worlds[w] = name
+    return worlds
 
 
 def _list_worlds(saves_dir):
@@ -221,14 +345,19 @@ def cmd_save_worlds():
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     total = 0
     for saves_dir, mc_label in saves:
+        # страховка: никогда не сохраняем бэкап сам в себя
+        if _in_worlds_backup(saves_dir):
+            debug.dbg(f"save_worlds: пропускаю источник-бэкап {saves_dir}")
+            continue
         worlds = _list_worlds(saves_dir)
         if not worlds:
             continue
         info(f"Из {CYAN}{saves_dir}{RESET}: {len(worlds)} мир(ов)")
-        dest_root = backup / Path(mc_label).name.replace(" ", "_") / "saves"
+        inst_name = Path(mc_label).name.replace(" ", "_")
+        dest_root = backup / inst_name / "saves"
         # Резервная копия старых миров на диске (одна на запуск)
         if dest_root.is_dir():
-            old = backup / Path(mc_label).name.replace(" ", "_") / f"saves.bak-{stamp}"
+            old = backup / inst_name / f"saves.bak-{stamp}"
             try:
                 dest_root.rename(old)
                 info(f"Старые копии на диске сохранены: {old.name}")
@@ -260,25 +389,25 @@ def cmd_load_worlds():
     if not backup.is_dir():
         err(f"На диске нет папки {backup}. Сначала выполни saveworlds.")
         return
-    # Собираем миры со всех подпапок backups
-    found = {}  # world_name -> (src_path, size)
-    for sub in backup.rglob("*"):
-        try:
-            if sub.is_dir() and ((sub / "level.dat").exists() or (sub / "region").is_dir()):
-                # не ныряем внутрь уже найденного мира
-                if not any(str(sub).startswith(str(w) + os.sep) for w in found):
-                    found[sub.name] = sub
-        except OSError:
-            continue
+    # Собираем миры целевым обходом известной структуры бэкапа:
+    # <inst>/saves[.bak-*]/<world> и <inst>/worlds/<world>.
+    # Коллизии имён не теряются — копии переименовываются с меткой инстанта.
+    found = _collect_backup_worlds(backup)
     if not found:
         err("На диске миры не найдены (нет level.dat/region).")
         return
+    n_snaps = len({p.parent.name for p in found})
+    info(f"Найдено миров: {len(found)} (из {n_snaps} снимков на диске)")
     saves = get_saves_dirs()
+    target = None
     if saves:
-        target = saves[0][0]
+        target = choose_saves_target(saves)
+        if target is None:
+            warn("Отменено.")
+            return
     else:
         mc = None
-        dirs = find_minecraft_dirs(limit=12)
+        dirs = [d for d in find_minecraft_dirs(limit=12) if not _in_worlds_backup(d)]
         if dirs:
             mc = dirs[0]
         else:
@@ -295,7 +424,8 @@ def cmd_load_worlds():
             return
         info(f"Целевая папка: {CYAN}{target}{RESET}")
     total = 0
-    for wname, src in sorted(found.items()):
+    loaded = 0
+    for src, wname in sorted(found.items(), key=lambda kv: str(kv[0])):
         dst = target / wname
         if dst.exists():
             warn(f"  '{wname}' уже есть в игре — пропускаю (удали вручную для замены).")
@@ -303,11 +433,12 @@ def cmd_load_worlds():
         info(f"  Ставлю '{wname}'...")
         n = _copy_tree(src, dst)
         total += n
+        loaded += 1
         ok(f"  '{wname}' → {dst} ({n} файлов)")
     if total == 0:
         warn("Нечего загружать (все миры уже на месте).")
         return
-    ok(f"Готово: {total} файлов загружено в {target}")
+    ok(f"Готово: {loaded} мир(ов), {total} файлов загружено в {target}")
     hint("Запусти игру — миры появятся в списке.")
 
 
@@ -335,9 +466,14 @@ def cmd_worlds_menu():
             if disk:
                 backup = disk / "minecraft-worlds"
                 if backup.is_dir():
-                    for w in sorted({p.name for p in backup.rglob("*")
-                                     if p.is_dir() and (p / "level.dat").exists()}):
-                        print(f"    {CYAN}{w}{RESET}")
+                    # целевой обход известной структуры бэкапа (без rglob по всему дереву)
+                    worlds = _collect_backup_worlds(backup)
+                    if not worlds:
+                        warn(f"В {backup} миры не найдены.")
+                    for src, wname in sorted(worlds.items(), key=lambda kv: str(kv[0])):
+                        inst = src.parent.name          # saves / saves.bak-... / worlds
+                        tag = src.parent.parent.name    # имя инстанта
+                        print(f"    {CYAN}{wname}{RESET}  {DIM_}[{tag}/{inst}]{RESET}")
                 else:
                     warn(f"Папка {backup} пуста/отсутствует.")
         elif choice == "0":
