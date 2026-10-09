@@ -244,10 +244,16 @@ MOJANG_RESOURCES = "https://resources.download.minecraft.net/"
 def make_github_mirrors(url):
     """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей).
 
-    Прокси умеют отдавать только ассеты github.com/.../releases/download/...;
-    для api.github.com и прочих URL возвращают пустой список — качаем прямо.
+    Прокси умеют отдавать ассеты GitHub Releases — поддерживаются оба
+    формата ссылок:
+      - github.com/.../releases/download/<tag>/<file>  (конкретный релиз);
+      - github.com/.../releases/latest/download/<file> (последний релиз,
+        используется в офлайн-каталоге шейдеров).
+    Для api.github.com и прочих URL возвращают пустой список — качаем прямо.
     """
-    if "github.com" not in url or "/releases/download/" not in url:
+    if "github.com" not in url:
+        return []
+    if "/releases/download/" not in url and "/releases/latest/download/" not in url:
         return []
     return [
         ("ghfast.top",      f"https://ghfast.top/{url}"),
