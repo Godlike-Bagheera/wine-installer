@@ -104,6 +104,8 @@ def print_help():
     print(f"  {CYAN}prism{RESET}                — Prism Launcher")
     print(f"  {CYAN}legacy{RESET}               — Legacy Launcher")
     print(f"  {CYAN}shaders{RESET}              — установить шейдер-пак (shaderpacks)")
+    print(f"  {CYAN}shaders <URL>{RESET}       — пак по прямой ссылке (.zip)")
+    print(f"  {CYAN}опубликовать{RESET}        — опубликовать свой пак на GitHub")
     print(f"  {CYAN}install-java{RESET}         — портативная JDK 17")
     print(f"{BOLD}── Миры (Диск D, RED OS) ─────────────────────────{RESET}")
     print(f"  {CYAN}worlds{RESET}              — меню миров (диск D)")
@@ -230,6 +232,7 @@ def process_input(name, last_exe):
         "waitgame", "ждатьигру",
         "games", "игры",
         "shaders", "шейдеры", "шейдер",
+        "опубликовать", "опубликовать на github",
     ) or (
         (low.startswith("gamestatus") or low.startswith("stopgame") or
          low.startswith("waitgame") or low.replace(" ", "").startswith("остановитьигру") or
@@ -248,8 +251,10 @@ def process_input(name, last_exe):
             cmd_waitgame(args)
         elif low in ("games", "игры"):
             cmd_games_list()
+        elif nospace.startswith("опубликовать"):
+            cmd_shaders("publish")
         else:
-            cmd_shaders()
+            cmd_shaders(args)
         return last_exe, True
     if low in ("minecraft", "майнкрафт"):
         cmd_minecraft()

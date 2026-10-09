@@ -12,10 +12,13 @@
 
 Шейдеры работают с OptiFine / Iris / Fabulously Optimized.
 """
+import os
 import json
 import re
 import shutil
 import zipfile
+import urllib.parse
+import urllib.request
 import subprocess
 from pathlib import Path
 
@@ -278,8 +281,264 @@ def install_shader_zip(zip_path, shaderpacks_dir):
     return dest
 
 
-def cmd_shaders():
-    """Команда shaders / шейдеры — интерактивная установка шейдер-пака."""
+def _download_to_temp(url, fname):
+    """Скачивает файл по URL в WINE_DIR/shaders. Возвращает Path или None."""
+    tmp = WINE_DIR / "shaders"
+    tmp.mkdir(parents=True, exist_ok=True)
+    if not fname.lower().endswith(".zip"):
+        fname += ".zip"
+    dest_zip = tmp / fname
+    mirrors = [("direct", url)]
+    gh = make_github_mirrors(url)
+    if gh:
+        mirrors += gh
+    if download_file(mirrors, dest_zip, fname, min_size_mb=0, silent=False):
+        return dest_zip
+    return None
+
+
+def _install_from_url(name, url, shaderpacks_dir):
+    """Скачивает zip по ссылке и устанавливает в shaderpacks/. True/False."""
+    info(f"Скачиваю '{name}'...")
+    fname = url.split("/")[-1].split("?")[0] or f"{name}.zip"
+    dest_zip = _download_to_temp(url, fname)
+    if dest_zip is None:
+        err("Скачать не удалось.")
+        return False
+    installed = install_shader_zip(dest_zip, shaderpacks_dir)
+    if installed is None:
+        try:
+            dest_zip.unlink()
+        except OSError:
+            pass
+        hint("Файл удалён как невалидный. Попробуй другой пак.")
+        return False
+    ok(f"Шейдер установлен: {installed}")
+    return True
+
+
+def cmd_publish_shader():
+    """Команда «опубликовать» — публикация своего шейдер-пака на GitHub.
+
+    Публикация идёт через GitHub API (нужен токен с правом repo). Если у
+    пользователя нет токена, вместо ошибки показываем понятную инструкцию,
+    как опубликовать пак вручную через веб-интерфейс (Create repository →
+    Upload files → Releases → Draft new release → Attach binaries → Publish).
+    Именно отсутствие токена обычно и даёт сообщение вида
+    «нет контента для отправки» / 401 Bad credentials.
+    """
+    import urllib.error
+
+    print(f"\n{BOLD}═══ ПУБЛИКАЦИЯ ШЕЙДЕР-ПАКА НА GITHUB ═══{RESET}")
+
+    # 1. Какой файл публикуем?
+    packs = sorted((WINE_DIR / "shaders").glob("*.zip")) \
+        if (WINE_DIR / "shaders").is_dir() else []
+    src = None
+    if packs:
+        print("Недавние скачанные паки:")
+        for i, p in enumerate(packs, 1):
+            print(f"  {CYAN}{i}{RESET}) {p.name} "
+                  f"({p.stat().st_size // 1024} КБ)")
+        print(f"  {CYAN}0{RESET}) Свой путь к .zip")
+        try:
+            choice = input(f"{YELLOW}Номер: {RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return True
+        if choice.isdigit() and 1 <= int(choice) <= len(packs):
+            src = packs[int(choice) - 1]
+    if src is None:
+        try:
+            path_in = input(f"{YELLOW}Путь к .zip шейдер-пака: {RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return True
+        src = Path(path_in).expanduser() if path_in else None
+    if src is None or not src.is_file():
+        err(f"Файл не найден: {src}")
+        return True
+    if not validate_shader_zip(src):
+        warn("Файл не похож на шейдер-пак (битый zip или не шейдеры).")
+        try:
+            go = input("Продолжить всё равно? [y/N]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return True
+        if go not in ("y", "yes", "д", "да"):
+            warn("Отменено.")
+            return True
+
+    # 2. Ищем токен GitHub: env → gh CLI → ~/.gitconfig credential helper
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    token_src = "переменная окружения"
+    if not token:
+        try:
+            r = subprocess.run(["gh", "auth", "token"],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0 and r.stdout.strip():
+                token, token_src = r.stdout.strip(), "gh CLI"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if not token:
+        try:
+            r = subprocess.run(
+                ["git", "credential-fill"],
+                input="protocol=https\nhost=github.com\n\n",
+                capture_output=True, text=True, timeout=10)
+            for line in (r.stdout or "").splitlines():
+                if line.startswith("password="):
+                    token, token_src = line[len("password="):], "git-credential"
+                    break
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # 3. Токена нет — НЕ падаем с «нет контента для отправки», а объясняем
+    if not token:
+        warn("Не найден токен GitHub — публиковать нечем "
+             "(«нет контента для отправки»).")
+        hint("Вариант А (через браузер, без токена): github.com → New repository "
+             "→ загрузи " + src.name + " → Actions/Releases → Draft new release "
+             "→ Attach Binaries → Publish release.")
+        hint("Вариант Б (автоматом): создай токен на "
+             "github.com/settings/tokens (право repo), затем:")
+        hint("    export GITHUB_TOKEN=ТВОЙ_ТОКЕН  и повтори «опубликовать»")
+        hint("    (или установи gh CLI: https://cli.github.com/, `gh auth login`)")
+        return True
+
+    # 4. Логин владельца токена
+    info(f"Токен найден ({token_src}), проверяю доступ...")
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/user",
+            headers={"Authorization": f"token {token}",
+                     "User-Agent": "wine-installer/2.5"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            login = json.loads(resp.read()).get("login")
+    except urllib.error.HTTPError as e:
+        err(f"GitHub API: {e.code} — токен недействителен или истёк.")
+        hint("Обнови токен: github.com/settings/tokens (право repo, срок ~30 дней)")
+        return True
+    except Exception as e:
+        debug.dbg_exc(e, "publish/user")
+        err(f"Нет связи с api.github.com: {e}")
+        return True
+    if not login:
+        err("Не удалось определить владельца токена.")
+        return True
+
+    # 5. Репозиторий (имя по умолчанию — из имени файла)
+    default_repo = re.sub(r"[^A-Za-z0-9._-]", "-", src.stem)[:60] or "shader-pack"
+    try:
+        repo_name = input(f"{YELLOW}Имя репозитория [{default_repo}]: {RESET}").strip() \
+            or default_repo
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return True
+    tag = f"{src.stem}-v1.0".replace(" ", "-")
+
+    def _api(method, path, payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        rq = urllib.request.Request(
+            f"https://api.github.com{path}", data=data, method=method,
+            headers={"Authorization": f"token {token}",
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "wine-installer/2.5"})
+        with urllib.request.urlopen(rq, timeout=30) as resp:
+            body = resp.read()
+            return json.loads(body) if body else {}
+
+    # 5a. Создать репозиторий (если ещё нет)
+    try:
+        _api("POST", "/user/repos",
+             {"name": repo_name, "public": True, "auto_init": True})
+        ok(f"Создан репозиторий: {CYAN}github.com/{login}/{repo_name}{RESET}")
+    except urllib.error.HTTPError as e:
+        if e.code == 422:  # уже существует
+            info(f"Репозиторий {login}/{repo_name} уже есть — дополняю.")
+        elif e.code in (401, 403):
+            err(f"GitHub API: {e.code} — у токена нет прав на создание репо "
+                "(нужно право repo).")
+            return True
+        else:
+            err(f"GitHub API: {e.code} {e.reason}")
+            return True
+    except Exception as e:
+        debug.dbg_exc(e, "publish/create-repo")
+        err(f"Ошибка сети при создании репозитория: {e}")
+        return True
+
+    # 5b. Загрузить zip в main (PUT /contents/<path>)
+    import base64
+    try:
+        content_b64 = base64.b64encode(src.read_bytes()).decode()
+        check_api = lambda: _api(  # noqa: E731
+            "GET", f"/repos/{login}/{repo_name}/contents/{src.name}?ref=main")
+        params = {"message": f"Add {src.name}", "content": content_b64,
+                  "branch": "main"}
+        try:
+            params["sha"] = check_api().get("sha")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        except Exception:
+            pass
+        _api("PUT", f"/repos/{login}/{repo_name}/contents/{src.name}", params)
+        ok(f"Файл загружен: {src.name}")
+    except urllib.error.HTTPError as e:
+        err(f"GitHub API: {e.code} — файл не загружен.")
+        return True
+    except Exception as e:
+        debug.dbg_exc(e, "publish/upload")
+        err(f"Ошибка загрузки файла: {e}")
+        return True
+
+    # 5c. Release с ассетом
+    try:
+        rel = _api("POST", f"/repos/{login}/{repo_name}/releases",
+                   {"tag_name": tag, "name": f"{src.stem} v1.0",
+                    "body": f"Shader pack {src.name}, published via Wine Installer.",
+                    "draft": False, "prerelease": False})
+        upload_url = (rel.get("upload_url") or "").split("{")[0]
+        if upload_url:
+            rq = urllib.request.Request(
+                f"{upload_url}?name={urllib.parse.quote(src.name)}",
+                data=src.read_bytes(), method="POST",
+                headers={"Authorization": f"token {token}",
+                         "Content-Type": "application/zip",
+                         "User-Agent": "wine-installer/2.5"})
+            with urllib.request.urlopen(rq, timeout=120) as resp:
+                asset = json.loads(resp.read() or b"{}")
+            dl = asset.get("browser_download_url", "")
+            ok("Релиз опубликован!")
+            hint(f"Страница: https://github.com/{login}/{repo_name}/releases/tag/{tag}")
+            if dl:
+                hint(f"Прямая ссылка: {dl}")
+                hint("Эту ссылку другие игроки могут вставить в «shaders <URL>» "
+                     "или скачать через download.")
+        else:
+            warn("Release создан, но upload_url пуст — приложи файл вручную.")
+    except urllib.error.HTTPError as e:
+        err(f"GitHub API: {e.code} — релиз не создан "
+            "(файл в репозитории остался).")
+        hint(f"Доделай вручную: github.com/{login}/{repo_name}/releases/new")
+    except Exception as e:
+        debug.dbg_exc(e, "publish/release")
+        err(f"Ошибка создания релиза: {e}")
+    return True
+
+
+def cmd_shaders(arg=""):
+    """Команда shaders / шейдеры — интерактивная установка шейдер-пака.
+
+    Аргументы:
+      shaders            — каталог (Modrinth + офлайн-список);
+      shaders publish    — опубликовать свой пак на GitHub;
+      shaders <URL>      — установить пак по прямой ссылке (.zip).
+    """
+    arg = (arg or "").strip()
+    if arg.lower() in ("publish", "опубликовать", "pub"):
+        return cmd_publish_shader()
     print(f"\n{BOLD}═══ УСТАНОВКА ШЕЙДЕРОВ ═══{RESET}")
     mc, version = pick_target_mc()
     if mc is None:
@@ -292,6 +551,12 @@ def cmd_shaders():
         info(f"Целевая версия: {CYAN}{version}{RESET}")
     elif vers:
         info(f"Установленные версии: {CYAN}{', '.join(vers[:5])}{RESET}")
+    # Прямая ссылка: shaders https://.../MyShaders.zip
+    if arg.lower().startswith(("http://", "https://")):
+        _install_from_url(Path(arg.split("?")[0].split("/")[-1]).stem or "shader",
+                          arg, mc / "shaderpacks")
+        hint("В игре: Настройки → Графика → Шейдеры → выбрать пакет → Применить.")
+        return True
     packs = build_shader_catalog()
     if not packs:
         err("Каталог пуст (ни сеть, ни офлайн-список не помогли).")
@@ -316,33 +581,15 @@ def cmd_shaders():
     if not urls:
         err("Для этого пака нет ссылки.")
         return True
-    # зеркала: прямая ссылка + github-прокси если URL с github releases
-    mirrors = [("direct", urls[0])]
-    gh = make_github_mirrors(urls[0])
-    if gh:
-        mirrors += gh
-    for extra in urls[1:]:
-        mirrors.append(("alt", extra))
-    tmp = WINE_DIR / "shaders"
-    tmp.mkdir(parents=True, exist_ok=True)
-    fname = urls[0].split("/")[-1].split("?")[0] or f"{name}.zip"
-    if not fname.lower().endswith(".zip"):
-        fname += ".zip"
-    dest_zip = tmp / fname
-    info(f"Скачиваю '{name}'...")
-    if not download_file(mirrors, dest_zip, name, min_size_mb=0, silent=False):
-        err("Скачать не удалось.")
-        return True
     shaderpacks = mc / "shaderpacks"
-    installed = install_shader_zip(dest_zip, shaderpacks)
-    if installed is None:
-        try:
-            dest_zip.unlink()
-        except OSError:
-            pass
-        hint("Файл удалён как невалидный. Попробуй другой пак.")
+    # пробуем все ссылки пака (прямая + github-зеркала подставляются внутри)
+    ok_installed = False
+    for url in urls:
+        if _install_from_url(name, url, shaderpacks):
+            ok_installed = True
+            break
+    if not ok_installed:
         return True
-    ok(f"Шейдер установлен: {installed}")
     hint("В игре: Настройки → Графика → Шейдеры → выбрать пакет → Применить.")
     hint("Нужен OptiFine или Iris (Fabulously Optimized уже содержит Iris).")
     return True
