@@ -9,6 +9,6 @@ __pycache__/
 
 # Local artifacts (wine prefix, logs, settings)
 wine-portable/
-/logs/
+logs/
 settings.json
 .env

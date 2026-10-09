@@ -16,12 +16,6 @@ import sys
 import traceback
 from pathlib import Path
 
-# ---------- ПРОВЕРКА ВЕРСИИ PYTHON ----------
-if sys.version_info < (3, 9):
-    print("\033[91m[✗]\033[0m Требуется Python 3.9 или новее!")
-    print(f"\033[96m[→]\033[0m У тебя: {sys.version.split()[0]}")
-    sys.exit(1)
-
 # Форсируем рабочую директорию = папка скрипта (можно запускать откуда угодно)
 SCRIPT_DIR = Path(__file__).resolve().parent
 os.chdir(SCRIPT_DIR)
