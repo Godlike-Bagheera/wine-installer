@@ -396,10 +396,16 @@ def install_shader_zip(zip_path, shaderpacks_dir):
 
 
 def _download_to_temp(url, fname):
-    """Скачивает файл по URL в WINE_DIR/shaders. Возвращает Path или None."""
+    """Скачивает файл по URL в WINE_DIR/shaders. Возвращает Path или None.
+
+    Огрызки неполных закачек никогда не остаются в кэше: проверка размера
+    выполняется внутри блока try (ошибка st_size < min_bytes раньше возникала
+    ДО try/finally и оставляла битый файл в WINE_DIR/shaders навсегда), а
+    удаление — в finally.
+    """
     tmp = WINE_DIR / "shaders"
     tmp.mkdir(parents=True, exist_ok=True)
-    if not fname.lower().endswith(".zip"):
+    if not fname.lower().endswith((".zip", ".7z", ".jar")):
         fname += ".zip"
     dest_zip = tmp / fname
     # Leftover от предыдущей (возможно, частичной) загрузки с тем же
@@ -413,14 +419,44 @@ def _download_to_temp(url, fname):
     gh = make_github_mirrors(url)
     if gh:
         mirrors += gh
-    if download_file(mirrors, dest_zip, fname, min_size_mb=0, silent=False):
-        return dest_zip
-    # Неудача — не оставляем огрызок в кэше.
+    good = False
     try:
-        dest_zip.unlink(missing_ok=True)
+        if download_file(mirrors, dest_zip, fname, min_size_mb=0, silent=False):
+            # Валидация — ВНУТРИ try: любое исключение (в т.ч. при проверке
+            # размера огрызка) не должно «прыгать» мимо finally.
+            min_bytes = 1024
+            size = dest_zip.stat().st_size          # FileNotFoundError -> raise
+            if size < min_bytes:                    # оборванный огрызок
+                debug.dbg(f"_download_to_temp: {fname} слишком мал ({size} Б)")
+            elif not _looks_like_archive(dest_zip):
+                debug.dbg(f"_download_to_temp: {fname} не архив (HTML?)")
+            else:
+                good = True
+    finally:
+        if not good:
+            # Неудача/битый огрызок — не оставляем мусор в кэше.
+            try:
+                dest_zip.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return dest_zip if good else None
+
+
+def _looks_like_archive(path):
+    """Архив ли скачанный файл (zip/jar по сигнатуре PK, 7z по магическим
+    байтам)? Против HTML-заглушек прокси; содержимое проверяется дальше
+    в validate_shader_zip."""
+    p = Path(path)
+    try:
+        with open(p, "rb") as f:
+            head = f.read(6)
     except OSError:
-        pass
-    return None
+        return False
+    if head.startswith(b"PK"):          # .zip / .jar
+        return True
+    if head.startswith(b"7z\xbc\xaf\x27\x1c"):   # .7z
+        return True
+    return False
 
 
 def _install_from_url(name, url, shaderpacks_dir):
@@ -431,21 +467,112 @@ def _install_from_url(name, url, shaderpacks_dir):
     if dest_zip is None:
         err("Скачать не удалось.")
         return False
-    installed = install_shader_zip(dest_zip, shaderpacks_dir)
-    if installed is None:
+    try:
+        installed = install_shader_zip(dest_zip, shaderpacks_dir)
+    finally:
+        # Временный архив больше не нужен (ни в случае успеха, ни при
+        # невалидном файле) — убираем, чтобы не копился в кэше.
         try:
-            dest_zip.unlink()
+            dest_zip.unlink(missing_ok=True)
         except OSError:
             pass
+    if installed is None:
         hint("Файл удалён как невалидный. Попробуй другой пак.")
         return False
-    # Временный архив больше не нужен — убираем, чтобы не копился в кэше.
-    try:
-        dest_zip.unlink()
-    except OSError:
-        pass
     ok(f"Шейдер установлен: {installed}")
     return True
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Список установленных шейдер-паков (для UI)
+# ─────────────────────────────────────────────────────────────────────
+
+SHADER_ARCHIVE_EXTS = (".zip", ".7z", ".jar")
+
+
+def get_shader_list(mc_dir=None):
+    """Шейдер-паки, реально установленные в игре: имена файлов вида
+    <gameDir>/shaderpacks/*.{zip,7z,jar} БЕЗ расширений.
+
+    Раньше сюда попадали первые записи офлайн-каталога Complementary-ссылок
+    (названия файлов latest.json вроде 'ComplementaryReimagined_r5.4.zip') —
+    пользователь видел в UI «мусор», даже когда ни один пак не установлен.
+
+    Если папок .minecraft нет вовсе — возвращаем [] (неизвестно, куда ставить).
+    Если shaderpacks существует, но пуст — отдаём известный офлайн-каталог
+    как фолбэк («что можно установить»), помечая его star=True.
+    """
+    dirs = [Path(mc_dir)] if mc_dir else find_minecraft_dirs(limit=12)
+    if not dirs:
+        return []
+    names = []
+    seen_sp = False
+    for d in dirs:
+        sp = Path(d) / "shaderpacks"
+        if not sp.is_dir():
+            continue
+        seen_sp = True
+        try:
+            entries = sorted(sp.iterdir(), key=lambda p: p.name.lower())
+        except OSError as e:
+            debug.dbg(f"get_shader_list: {e}")
+            continue
+        for f in entries:
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in SHADER_ARCHIVE_EXTS:
+                continue
+            name = f.name[:-len(f.suffix)]
+            if name and name not in names:
+                names.append(name)
+    if names:
+        return [{"name": n, "star": False} for n in names]
+    if seen_sp:
+        # Ничего не установлено — фолбэк: известный офлайн-каталог.
+        return [{"name": p["name"], "star": True} for p in OFFLINE_SHADERS]
+    return []
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Установка мода (.jar/.zip) в mods/ правильной версии Minecraft
+# ─────────────────────────────────────────────────────────────────────
+
+def install_mod_from_zip(zip_path, mc_dir=None):
+    """Кладёт мод (.jar/.zip) в <gameDir>/mods выбранной игры.
+
+    Цель выбирается через pick_target_mc(): запущенная игра / последняя
+    игранная версия (launcher_profiles.json). Раньше использовался
+    installed_mc_versions()[0] — первая папка по mtime, а mtime меняется от
+    любых файловых операций (включая саму установку), из-за чего мод улетал
+    не в ту версию Minecraft (тот же класс бага, что в shaders.py).
+    Возвращает путь к установленному файлу или None.
+    """
+    src = Path(zip_path)
+    if not src.is_file():
+        err(f"Файл не найден: {src}")
+        return None
+    if src.suffix.lower() not in (".jar", ".zip"):
+        err("Мод должен быть .jar или .zip")
+        return None
+    if mc_dir is None:
+        mc_dir, _ver = pick_target_mc()
+    if mc_dir is None:
+        err("Папка .minecraft не найдена — сначала установи игру.")
+        return None
+    mods_dir = Path(mc_dir) / "mods"
+    try:
+        mods_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        err(f"Не могу создать {mods_dir}: {e}")
+        return None
+    dest = mods_dir / src.name
+    try:
+        shutil.copy2(src, dest)
+    except OSError as e:
+        err(f"Копирование не удалось: {e}")
+        return None
+    ok(f"Мод установлен: {dest}")
+    return dest
 
 
 def cmd_shaders(arg=""):
