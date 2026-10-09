@@ -1329,6 +1329,7 @@ def cmd_minecraft():
         print(f"  {CYAN}6{RESET}) Установить Java (для OptiFine)")
         print(f"  {CYAN}7{RESET}) Автофикс игры (проверка + починка ошибок)")
         print(f"  {CYAN}8{RESET}) Миры → Диск D / ← Диск D (RED OS)")
+        print(f"  {CYAN}9{RESET}) Установить шейдеры (shaderpacks)")
         print(f"  {CYAN}0{RESET}) Назад")
         try:
             choice = input(f"{YELLOW}Выбор: {RESET}").strip()
@@ -1353,6 +1354,9 @@ def cmd_minecraft():
         elif choice == "8":
             from modules.worlds import cmd_worlds_menu
             cmd_worlds_menu()
+        elif choice == "9":
+            from modules.shaders import cmd_shaders
+            cmd_shaders()
         elif choice == "0":
             return
         else:

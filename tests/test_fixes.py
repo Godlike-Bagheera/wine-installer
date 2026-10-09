@@ -102,6 +102,88 @@ check("alpha отбраковывается", not mc._fo_is_release("v15.0.0-alp
 check("beta отбраковывается", not mc._fo_is_release("v15.0.0-beta.2"))
 check("rc отбраковывается", not mc._fo_is_release("v14.2.0-rc1"))
 
+# ── 7. интеграция UI: EXPECTED_COMMANDS, маршрутизация, справка без эмодзи ──
+import inspect                                             # noqa: E402
+import unicodedata                                        # noqa: E402
+from modules.config import EXPECTED_COMMANDS              # noqa: E402
+import modules.ui as ui                                   # noqa: E402
+
+for c in ("gamestatus", "stopgame", "waitgame", "games", "shaders"):
+    check(f"EXPECTED_COMMANDS содержит '{c}'", c in EXPECTED_COMMANDS)
+
+src_pi = inspect.getsource(ui.process_input)
+for c in EXPECTED_COMMANDS:
+    check(f"process_input обрабатывает '{c}'", c in src_pi)
+
+routed = {
+    "gamestatus": "cmd_game_status",
+    "состояниеигр": "cmd_game_status",
+    "статусигр": "cmd_game_status",
+    "games": "cmd_games_list",
+    "игры": "cmd_games_list",
+    "shaders": "cmd_shaders",
+    "шейдеры": "cmd_shaders",
+}
+called = {}
+_orig = {
+    "cmd_game_status": ui.cmd_game_status,
+    "cmd_games_list": ui.cmd_games_list,
+    "cmd_shaders": ui.cmd_shaders,
+    "cmd_stopgame": ui.cmd_stopgame,
+    "cmd_waitgame": ui.cmd_waitgame,
+}
+ui.cmd_game_status = lambda: called.update(fn="cmd_game_status")
+ui.cmd_games_list = lambda: called.update(fn="cmd_games_list")
+ui.cmd_shaders = lambda: called.update(fn="cmd_shaders")
+ui.cmd_stopgame = lambda arg="": called.update(fn="cmd_stopgame", arg=arg)
+ui.cmd_waitgame = lambda arg="": called.update(fn="cmd_waitgame", arg=arg)
+try:
+    for inp, expect_fn in routed.items():
+        called.clear()
+        last, cont = ui.process_input(inp, None)
+        check(f"маршрутизация '{inp}' -> {expect_fn}",
+              cont and called.get("fn") == expect_fn)
+    for inp, expect_fn, expect_arg in [
+        ("stopgame all", "cmd_stopgame", "all"),
+        ("стопигра mine", "cmd_stopgame", "mine"),
+        ("waitgame mine", "cmd_waitgame", "mine"),
+        ("ждатьигру game#2", "cmd_waitgame", "game#2"),
+    ]:
+        called.clear()
+        last, cont = ui.process_input(inp, None)
+        check(f"маршрутизация с аргументом '{inp}'",
+              cont and called.get("fn") == expect_fn and called.get("arg") == expect_arg)
+finally:
+    for k, v in _orig.items():
+        setattr(ui, k, v)
+
+help_src = inspect.getsource(ui.print_help)
+emoji = [ch for ch in help_src if ord(ch) > 0x2B00 and
+         unicodedata.category(ch) in ("So", "Sk")]
+check("в print_help нет эмодзи", not emoji)
+for c in ("gamestatus", "games", "stopgame", "waitgame", "shaders"):
+    check(f"справка упоминает '{c}'", c in help_src)
+
+# ── 8. main(): exit-guard и статус в приглашении; живой smoke gamestate ──
+main_src = inspect.getsource(ui.main)
+check("main вызывает stop_all_games()", "stop_all_games()" in main_src)
+check("main показывает статус игр", "gamestate.running()" in main_src
+      and "gamestate.status_lines()" in main_src)
+mc_menu_src = inspect.getsource(mc.cmd_minecraft)
+check("меню Minecraft имеет пункт 9 (шейдеры)",
+      "9" in mc_menu_src and "cmd_shaders" in mc_menu_src)
+
+import subprocess                                          # noqa: E402
+from modules import gamestate                              # noqa: E402
+proc = subprocess.Popen(["sleep", "30"])
+gamestate.register("smoketest", proc, "/bin/sleep", kind="test")
+check("gamestate: игра в реестре", "smoketest" in gamestate.running())
+lines = gamestate.status_lines()
+check("gamestate: status_lines непустой", any("smoketest" in l for l in lines))
+stopped = gamestate.stop_one("smoketest")
+check("gamestate: stop_one остановила", stopped is True)
+check("gamestate: реестр пуст после остановки", not gamestate.running())
+
 print()
 if fails:
     print(f"ПРОВАЛОВ: {len(fails)} -> {fails}")
