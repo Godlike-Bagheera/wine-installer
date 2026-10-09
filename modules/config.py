@@ -1,6 +1,15 @@
 """Все константы и пути. Никакой логики — только данные."""
 import os
+import re
 from pathlib import Path
+
+
+# Прокси-зеркала GitHub (порядок = приоритет).
+_GH_PROXIES = [
+    ("ghfast.top",   "https://ghfast.top/"),
+    ("ghproxy.net",  "https://ghproxy.net/"),
+    ("gh-proxy.com", "https://gh-proxy.com/"),
+]
 
 
 # ---------- ПУТИ ----------
@@ -244,22 +253,57 @@ MOJANG_RESOURCES = "https://resources.download.minecraft.net/"
 def make_github_mirrors(url):
     """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей).
 
-    Прокси умеют отдавать ассеты GitHub Releases — поддерживаются оба
-    формата ссылок:
-      - github.com/.../releases/download/<tag>/<file>  (конкретный релиз);
-      - github.com/.../releases/latest/download/<file> (последний релиз,
-        используется в офлайн-каталоге шейдеров).
+    Прокси умеют отдавать ассеты GitHub Releases — поддерживаются все
+    форматы ссылок:
+      - github.com/<owner>/<repo>/releases/download/<tag>/<file>
+        (конкретный релиз);
+      - github.com/<owner>/<repo>/releases/latest/download/<file>
+        (последний релиз, используется в офлайн-каталоге шейдеров);
+      - ghuser.io/<owner>/<repo>@<tag>/<file> — сокращённые ссылки
+        (встречаются в конфигах модпаков);
+      - адреса с портом (github.com:8080/...) и редирект-пути
+        (/releases/latest/..., /releases/tag/...).
     Для api.github.com и прочих URL возвращают пустой список — качаем прямо.
     """
+    # Сокращённая форма ghuser/repo@tag/file — свои зеркала.
+    canonical = _short_github_form(url)
+    if canonical:
+        return [(name, f"{prefix}{canonical}") for name, prefix in _GH_PROXIES]
+
     if "github.com" not in url:
         return []
-    if "/releases/download/" not in url and "/releases/latest/download/" not in url:
+    # Только API — прокси не нужны (и ломают запрос), качаем прямо.
+    no_scheme = re.sub(r"^\w+://", "", url).lower()
+    if no_scheme.startswith("api.github.com") or "://api.github.com" in url.lower():
         return []
-    return [
-        ("ghfast.top",      f"https://ghfast.top/{url}"),
-        ("ghproxy.net",     f"https://ghproxy.net/{url}"),
-        ("gh-proxy.com",    f"https://gh-proxy.com/{url}"),
-    ]
+    # Раньше путь вырезался жадным регэкспом «(.+?)/releases», из-за чего
+    # адреса с портом (github.com:8080/owner/repo/releases/...) давали битые
+    # зеркала (owner/repo:8080). Теперь host и path разделяются явно, а
+    # owner/repo берётся non-greedily до '/releases'.
+    m = re.search(r"github\.com(?::\d+)?/(.+?)/releases(/.*)?$", url)
+    if not m:
+        return []
+    # Редиректы /releases/latest и /releases/tag/<t> — прямой download-ассет
+    # неизвестен; оборачиваем ссылку целиком (прокси следуют редиректам).
+    return [(name, f"{prefix}{url}") for name, prefix in _GH_PROXIES]
+
+
+def _short_github_form(url):
+    """Сокращённая форма ghuser/repo@tag/file (gh.io, github.io, git.io).
+
+    Встречается в конфигах модпаков; раньше не поддерживалась вовсе.
+    Возвращает канонический URL releases/download или None.
+    """
+    m = re.search(r"(?:^|[/:.])g(?:h|it)\.io/github\.(?:io|com)/"
+                  r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)@([^/?#]+)/([^?#]+)", url)
+    if not m:
+        m = re.search(r"github\.(?:io|com)/([A-Za-z0-9_.-]+)/"
+                      r"([A-Za-z0-9_.-]+)@([^/?#]+)/([^?#]+)", url)
+    if not m:
+        return None
+    owner, repo, tag, asset = m.groups()
+    return (f"https://github.com/{owner}/{repo}"
+            f"/releases/download/{tag}/{asset}")
 
 
 def make_dxvk_mirrors(version):
