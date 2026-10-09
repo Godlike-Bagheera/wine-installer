@@ -1,24 +1,170 @@
-"""Поиск .exe и запуск через Wine (+ gamescope, MangoHud, TTS)."""
+"""Поиск .exe и запуск через Wine (+ gamescope, MangoHud, TTS).
+
+Игры запускаются в ФОНОВОМ режиме: subprocess.Popen + фоновый поток-читатель
+лога. Терминал сразу остаётся доступным для команд (gamestatus / stopgame /
+waitgame / games). proc.wait() больше не блокирует меню.
+"""
 import os
 import re
+import sys
 import time
 import shutil
+import threading
 import subprocess
 from pathlib import Path
 from modules import debug
-from modules.colors import info, warn, err, hint, BOLD, RESET
+from modules.colors import ok, info, warn, err, hint, CYAN, BOLD, RESET
 from modules.config import (
     HOME, WINE_BIN, LOG_DIR, PRIORITY_DIRS, EXCLUDE_DIRS,
-    SUPPORTED_EXT, MAX_RETRIES, OK_RUN_SECONDS, CRASH_SHOW_LOG_SECONDS,
+    SUPPORTED_EXT, OK_RUN_SECONDS,
     USE_GAMESCOPE, USE_TTS_NOTIFY,
 )
 from modules.prefix import ensure_prefix, get_wine_env
 from modules.wine import install_dxvk_to_wine
 from modules.winetricks import (
-    detect_missing_libs, install_via_winetricks, filter_line,
+    detect_missing_libs, filter_line,
 )
-from modules.settings import load_settings, update_history
+from modules.settings import load_settings, load_history, update_history
 from modules.gamemode import gamemode_available
+from modules import gamestate
+
+
+def _unique_name(stem):
+    """Уникальное имя процесса в реестре: game, game#2, game#3 ..."""
+    if stem not in gamestate.running() and stem not in getattr(_taken_names, "s", set()):
+        return stem
+    taken = set(gamestate.running()) | getattr(_taken_names, "s", set())
+    i = 2
+    while f"{stem}#{i}" in taken:
+        i += 1
+    return f"{stem}#{i}"
+
+
+_taken_names = set()
+
+
+def stop_all_games():
+    """Exit-guard: корректно останавливает все активные фоновые игры."""
+    n = gamestate.stop_all(kill_after=5)
+    if n:
+        info(f"Остановлено активных игр: {n}")
+    return n
+
+
+def cmd_game_status():
+    """Команда gamestatus — что запущено прямо сейчас."""
+    games = gamestate.running()
+    if not games:
+        info("Активных игр нет.")
+        hint("Запусти игру (<имя.exe>) — терминал останется доступен.")
+        return True
+    print(f"\n{BOLD}═══ АКТИВНЫЕ ИГРЫ ═══{RESET}")
+    for name, g in sorted(games.items()):
+        print(f"  {CYAN}{name}{RESET}: pid {g['proc'].pid}, "
+              f"идёт {gamestate.fmt_elapsed(g['start'])}")
+        print(f"    {Path(g['path']).name}  {CYAN}{g['path']}{RESET}")
+        if g.get("log"):
+            print(f"    лог: {g['log']}")
+    hint("stopgame <имя|all> — остановить, waitgame <имя> — дождаться выхода.")
+    return True
+
+
+def cmd_stopgame(arg=""):
+    """Команда stopgame — остановка фоновых игр (по имени или all)."""
+    games = gamestate.running()
+    if not games:
+        info("Активных игр нет.")
+        return True
+    arg = (arg or "").strip().lower()
+    if arg in ("", "all", "все"):
+        stopped_one = False
+        for name in list(games):
+            if gamestate.stop_one(name):
+                ok(f"Остановлено: {name}")
+                stopped_one = True
+        if not stopped_one:
+            info("Все процессы уже завершились сами.")
+        return True
+    # точное имя или префикс (game -> game#2 тоже подходит)
+    matches = [n for n in games if n.lower() == arg] or \
+              [n for n in games if n.lower().startswith(arg)]
+    if not matches:
+        err(f"Игра '{arg}' не найдена среди запущенных.")
+        hint(f"Запущено: {', '.join(sorted(games))}")
+        return True
+    name = matches[0]
+    if gamestate.stop_one(name):
+        ok(f"Остановлено: {name}")
+    else:
+        info(f"'{name}' уже завершилась — убрано из списка.")
+    return True
+
+
+def cmd_waitgame(arg=""):
+    """Команда waitgame — дождаться завершения фоновой игры."""
+    games = gamestate.running()
+    if not games:
+        info("Нет активных игр — ждать нечего.")
+        return True
+    arg = (arg or "").strip().lower()
+    if arg:
+        matches = [n for n in games if n.lower() == arg] or \
+                  [n for n in games if n.lower().startswith(arg)]
+        if not matches:
+            err(f"Игра '{arg}' не запущена.")
+            return True
+        name = matches[0]
+    elif len(games) == 1:
+        name = next(iter(games))
+    else:
+        names = ", ".join(sorted(games))
+        try:
+            name = input(f"{CYAN}Какую ждать? ({names}): {RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            return True
+        if name not in games:
+            err(f"Нет такой игры: {name}")
+            return True
+    g = games[name]
+    info(f"Жду завершения '{name}' (Ctrl+C — перестать ждать)...")
+    try:
+        rc = g["proc"].wait()
+    except KeyboardInterrupt:
+        warn("Перестал ждать. Игра продолжает работать в фоне.")
+        return True
+    secs = gamestate.fmt_elapsed(g["start"])
+    gamestate.unregister(name)
+    if rc == 0:
+        ok(f"'{name}' завершилась сама (время в игре: {secs}).")
+    else:
+        warn(f"'{name}' завершилась с кодом {rc} (время: {secs}).")
+        if g.get("log"):
+            hint(f"Лог: {g['log']}")
+    return True
+
+
+def cmd_games_list():
+    """Команда games — история + активные."""
+    data = load_history()
+    games_hist = data.get("games", [])
+    active = gamestate.running()
+    print(f"\n{BOLD}═══ ИГРЫ ═══{RESET}")
+    if not games_hist:
+        info("История пуста.")
+    for i, g in enumerate(games_hist, 1):
+        p = Path(g["path"])
+        mark = ""
+        for name in active:
+            if name.split("#")[0].lower() == p.stem.lower():
+                mark = f"  {CYAN}[активна]{RESET}"
+                break
+        print(f"  {i}) {p.name}  (запусков: {g.get('count', 1)}){mark}")
+    if active:
+        print("\n  Активные прямо сейчас:")
+        for line in gamestate.status_lines():
+            print(line)
+    hint("Номер или !! — запустить снова; stopgame — остановить.")
+    return True
 
 
 def get_log_path(exe_path):
@@ -132,7 +278,71 @@ def _build_cmd(path, use_gm):
     return base_cmd
 
 
+def _finalize_game(path, name, log_path, start_time, rc, missing_pkgs):
+    """Вызывается из фонового потока когда игра завершилась."""
+    gamestate.unregister(name)
+    _taken_names.discard(name)
+    duration = time.time() - start_time
+    # ok если игра прожила достаточно долго; ранний выход с кодом 0 — тоже падение
+    status = "ok" if duration >= OK_RUN_SECONDS else "crash"
+    if missing_pkgs:
+        warn(f"Во время игры не хватало библиотек: {', '.join(sorted(missing_pkgs))}. "
+             f"Введи: fonts / winetricks-фиксы, затем перезапусти.")
+    update_history(path, status=status, duration=duration)
+    if status == "ok":
+        ok(f"Игра '{name}' завершилась ({gamestate.fmt_elapsed(start_time)} в игре).")
+        _tts_say(f"{path.stem} закрылась")
+    else:
+        warn(f"Игра '{name}' завершилась за {duration:.1f} с — похоже, упала "
+             f"(код {rc}).")
+        hint(f"Лог: {log_path}")
+        _tts_say(f"{path.stem} завершилась с ошибкой")
+
+
+def _watch_game(proc, logf, path, name, log_path, start_time):
+    """Фоновый поток: читает вывод игры в лог пока процесс жив."""
+    missing_pkgs = set()
+    try:
+        for line in proc.stdout:
+            try:
+                logf.write(line)
+                logf.flush()
+            except (OSError, ValueError):
+                pass
+            shown = filter_line(line)
+            if shown is not None:
+                try:
+                    sys.stdout.write(shown)
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+            try:
+                for pkg in detect_missing_libs(line):
+                    missing_pkgs.add(pkg)
+            except Exception as e:
+                debug.dbg(f"detect_missing_libs: {e}")
+    except Exception as e:
+        debug.dbg_exc(e, f"_watch_game/{name}")
+    try:
+        rc = proc.wait(timeout=10)
+    except Exception:
+        rc = -1
+    finally:
+        try:
+            logf.close()
+        except Exception:
+            pass
+    try:
+        _finalize_game(path, name, log_path, start_time, rc, missing_pkgs)
+    except Exception as e:
+        debug.dbg_exc(e, "_finalize_game")
+
+
 def launch(path):
+    """Запуск игры в фоновом режиме: терминал сразу свободен для команд."""
+    active = gamestate.running()
+    for name, g in sorted(active.items()):
+        print(f"  {CYAN}[{name}]{RESET} идёт {gamestate.fmt_elapsed(g['start'])}")
     log_path = get_log_path(path)
     settings = load_settings()
     use_gm = settings.get("use_gamemode", False) and gamemode_available()
@@ -150,102 +360,42 @@ def launch(path):
     print()
     _tts_say(f"Запускаю {path.stem}")
 
-    installed_pkgs = set()
     wine_env = get_wine_env(exe_path=path)
-    final_status = "crash"
-    total_duration = 0.0
-    for attempt in range(1, MAX_RETRIES + 1):
-        if attempt > 1:
-            info(f"Повторная попытка {attempt}/{MAX_RETRIES}")
-        missing_pkgs = set()
-        start_time = time.time()
-        mode = "w" if attempt == 1 else "a"
+    cmd = _build_cmd(path, use_gm)
+    debug.dbg(f"Launch: {cmd}")
+    start_time = time.time()
+    try:
+        logf = open(log_path, "w", encoding="utf-8", errors="replace")
+    except OSError as e:
+        err(f"Не могу создать лог: {e}")
+        return
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(path.parent), env=wine_env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, encoding="utf-8", errors="replace",
+        )
+    except Exception as e:
+        debug.dbg_exc(e, "launch/Popen")
+        err(f"Ошибка запуска: {e}")
         try:
-            with open(log_path, mode, encoding="utf-8", errors="replace") as logf:
-                if attempt > 1:
-                    logf.write(f"\n\n=== ПОПЫТКА {attempt} ===\n\n")
-                cmd = _build_cmd(path, use_gm)
-                debug.dbg(f"Launch: {cmd}")
-                proc = subprocess.Popen(
-                    cmd, cwd=str(path.parent), env=wine_env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, encoding="utf-8", errors="replace",
-                )
-                if proc.stdout is None:
-                    proc.wait()
-                    # Засчитываем время даже если stdout недоступен
-                    total_duration += time.time() - start_time
-                    continue
-                import sys
-                try:
-                    for line in proc.stdout:
-                        logf.write(line)
-                        logf.flush()
-                        shown = filter_line(line)
-                        if shown is not None:
-                            sys.stdout.write(shown)
-                            sys.stdout.flush()
-                        for pkg in detect_missing_libs(line):
-                            missing_pkgs.add(pkg)
-                except KeyboardInterrupt:
-                    warn("Прервано (Ctrl+C)")
-                    hint("Лаунчер мог не успеть создать папки в game/")
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=5)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                    total_duration += time.time() - start_time
-                    update_history(path, status="unknown", duration=total_duration)
-                    return
-                proc.wait()
-        except Exception as e:
-            debug.dbg_exc(e, f"launch/attempt{attempt}")
-            err(f"Ошибка запуска: {e}")
-            update_history(path, status="crash", duration=total_duration)
-            return
-        duration = time.time() - start_time
-        total_duration += duration
-        if duration >= OK_RUN_SECONDS:
-            final_status = "ok"
-            if not missing_pkgs:
-                update_history(path, status="ok", duration=total_duration)
-                _tts_say(f"{path.stem} закрылась")
-                return
-            warn(f"Отсутствуют библиотеки: {', '.join(sorted(missing_pkgs))}")
-            from modules.config import AUTO_FIX
-            if not AUTO_FIX:
-                update_history(path, status="ok", duration=total_duration)
-                return
-            try:
-                from modules.colors import MAGENTA
-                answer = input(f"{MAGENTA}Доустановить и перезапустить? [y/N]: {RESET}").strip().lower()
-            except (KeyboardInterrupt, EOFError):
-                update_history(path, status="ok", duration=total_duration)
-                return
-            if answer not in ("y", "yes", "д", "да"):
-                update_history(path, status="ok", duration=total_duration)
-                return
-        if not missing_pkgs:
-            if duration < CRASH_SHOW_LOG_SECONDS:
-                print()
-                warn(f"Игра завершилась за {duration:.1f} с — упала.")
-                hint("Открываю лог...")
-                time.sleep(0.5)
-                show_log(log_path)
-            update_history(path, status=final_status, duration=total_duration)
-            _tts_say(f"{path.stem} завершилась с ошибкой")
-            return
-        try:
-            install_via_winetricks(missing_pkgs, installed_pkgs, exe_path=path)
-        except KeyboardInterrupt:
-            update_history(path, status="unknown", duration=total_duration)
-            return
-        print()
-    warn(f"Лимит попыток ({MAX_RETRIES})")
-    if log_path.exists():
-        show_log(log_path)
-    update_history(path, status="crash", duration=total_duration)
+            logf.close()
+        except Exception:
+            pass
+        update_history(path, status="crash", duration=time.time() - start_time)
+        return
+    if proc.stdout is None:
+        # крайне маловероятно; фиксируем как обычный фоновый процесс без лога
+        name = _unique_name(path.stem)
+        gamestate.register(name, proc, path, log=log_path)
+        _taken_names.add(name)
+        ok(f"Игра '{name}' запущена в фоне. Команды: gamestatus, stopgame, waitgame")
+        return
+    name = _unique_name(path.stem)
+    _taken_names.add(name)
+    gamestate.register(name, proc, path, log=log_path)
+    t = threading.Thread(target=_watch_game, args=(proc, logf, path, name, log_path, start_time),
+                         daemon=True, name=f"gamewatch-{name}")
+    t.start()
+    ok(f"Игра '{name}' запущена в фоне — терминал доступен.")
+    hint("Команды: gamestatus, stopgame <имя|all>, waitgame <имя>, games")
