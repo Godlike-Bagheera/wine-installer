@@ -6,6 +6,7 @@
 поэтому перед копированием проверяется возможность записи; при неудаче
 предлагается выбрать другой путь вручную.
 """
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -55,7 +56,11 @@ def find_disk_d():
         except OSError:
             pass
 
-    # 2) Точки монтирования съёмных разделов
+    # 2) Точки монтирования съёмных разделов: /media/<user>/<vol>,
+    #    /run/media/<user>/<vol>, /mnt/<vol>. Кандидатом становится ТОЛЬКО
+    #    том с жёсткой меткой D (_is_d_label) — раньше достаточно было
+    #    подстроки «диск» в имени, из-за чего первым кандидатом мог стать
+    #    любой съёмный том («Диск C», флешка «DISK_1», сетевой шар).
     for base in ("/media", "/run/media", "/mnt"):
         root = Path(base)
         if not root.is_dir():
@@ -64,16 +69,24 @@ def find_disk_d():
             first = list(root.iterdir())
         except OSError:
             continue
-        for user_dir in first:
+        level2_dirs = []
+        for entry in first:
             try:
-                if not user_dir.is_dir():
+                if not entry.is_dir():
                     continue
+            except OSError:
+                continue
+            if _is_d_label(entry.name):
+                add(entry)          # /mnt/D, /mnt/Диск D — том прямо здесь
+            else:
+                level2_dirs.append(entry)   # это <user>, спускаемся глубже
+        for user_dir in level2_dirs:
+            try:
                 for vol in user_dir.iterdir():
                     try:
                         if not vol.is_dir():
                             continue
-                        name_low = vol.name.lower().strip()
-                        if name_low in _D_LABELS or "диск" in name_low or name_low == "d":
+                        if _is_d_label(vol.name):
                             add(vol)
                     except OSError:
                         continue
@@ -112,6 +125,8 @@ def _can_write(p):
     """Проверяет реальную возможность записи (для read-only шаров вернёт False)."""
     try:
         p = Path(p)
+        if not p.is_dir():
+            return False
         test = p / ".write_test.tmp"
         test.write_text("ok", encoding="utf-8")
         test.unlink()
@@ -119,6 +134,14 @@ def _can_write(p):
     except OSError as e:
         debug.dbg(f"_can_write({p}): {e}")
         return False
+
+
+def _is_d_label(name):
+    """Жёсткая проверка «это Диск D»: точное имя из справочника или одиночная
+    буква D. Подстроки вида 'диск' раньше ловили всё подряд — «Диск C»,
+    сетевой «Диск D backup (read only)» и пр. (ложные срабатывания)."""
+    n = name.lower().strip()
+    return n in _D_LABELS or n == "d"
 
 
 def choose_disk(auto=True):
@@ -306,7 +329,13 @@ def _list_worlds(saves_dir):
 
 
 def _copy_tree(src, dst, rel=""):
-    """Копирует дерево с прогрессом по файлам; возвращает число файлов."""
+    """Копирует дерево с прогрессом по файлам; возвращает число файлов.
+
+    Ошибки НЕ глотаем: любой сбой (нет прав, диск отвалился/переполнился)
+    бросает OSError наверх — вызывающий код удаляет неполную копию, иначе
+    полуобрезанный мир выглядел бы как успешное сохранение («теряем данные
+    при сбоях копирования»).
+    """
     count = 0
     dst.mkdir(parents=True, exist_ok=True)
     for item in sorted(src.iterdir()):
@@ -320,12 +349,28 @@ def _copy_tree(src, dst, rel=""):
                 shutil.copy2(item, target)
             except OSError as e:
                 debug.dbg(f"copy fail {item}: {e}")
-                warn(f"Пропущен файл: {rel}/{item.name} ({e})")
-                continue
+                raise OSError(f"сбой копирования {rel}/{item.name}: {e}") from e
             count += 1
             if count % 50 == 0:
                 print(f"\r  {DIM_}{count} файлов...{RESET}", end="", flush=True)
     return count
+
+
+def _copy_world(src, dst):
+    """Копирует один мир атомарно: во временную папку рядом с целью, затем
+    переименование. При сбое — временный огрызок удаляется, в целевой папке
+    не остаётся половины мира (раньше частичное дерево оставалось «живым»
+    и мешало повторной загрузке). Возвращает число файлов."""
+    tmp = dst.parent / f".{dst.name}.tmp-{os.getpid()}"
+    try:
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        n = _copy_tree(src, tmp)
+        os.replace(str(tmp), str(dst))
+        return n
+    finally:
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def cmd_save_worlds():

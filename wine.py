@@ -21,6 +21,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 os.chdir(SCRIPT_DIR)
 sys.path.insert(0, str(SCRIPT_DIR))
 
+# Модули приложения (debug нужен уже здесь: его использует _print_art ниже;
+# раньше импорт шёл только в блоке «ЗАПУСК», и --help с нечитаемым
+# ascii-art.txt падал NameError: name 'debug' is not defined).
+from modules import debug, state  # noqa: E402
+
 # ---------- ЕДИНЫЙ ИСТОЧНИК ВЕРСИИ ----------
 from modules.config import CURRENT_VERSION as VERSION  # noqa: E402
 
@@ -34,6 +39,8 @@ def _print_art():
             print(f"\033[96m{art}\033[0m")
     except Exception as e:
         debug.dbg_exc(e, "wine")
+
+
 if "--version" in sys.argv:
     print(f"Wine Installer + Game Launcher v{VERSION}")
     sys.exit(0)
@@ -63,7 +70,7 @@ if os.geteuid() == 0:
     sys.exit(1)
 
 # ---------- ЗАПУСК ----------
-from modules import debug, state  # noqa: E402
+# (debug/state уже импортированы в начале файла)
 
 
 def main():
