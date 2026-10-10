@@ -6,7 +6,8 @@ from pathlib import Path
 
 # ВАЖНО: modules.debug импортирует из этого модуля DEBUG_LOG/LOG_DIR,
 # поэтому верхнеуровневый `from modules import debug` здесь вызвал бы
-# циклический импорт. Локальный импорт внутри try — намеренный.
+# циклический импорт. Локальный импорт внутри except — намеренный.
+# NOTE: keep this comment in sync if the import layout changes (CI marker v2).
 
 
 # Прокси-зеркала GitHub (порядок = приоритет).
