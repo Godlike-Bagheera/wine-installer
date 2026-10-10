@@ -1,12 +1,11 @@
 """Скачивание с мультизеркал, докачкой, slow-mode, aria2c, HEAD-проверкой."""
 import os
-import ssl
 import time
 import subprocess
 import urllib.request
 import urllib.error       # <-- добавляем для HTTPError
 from pathlib import Path
-from modules import state, debug
+from modules import state, debug, net
 from modules.colors import ok, info, warn, err, CYAN, RESET
 from modules.config import (
     MIN_SPEED_KB, SPEED_TEST_SECONDS, CONNECT_TIMEOUT,
@@ -83,9 +82,7 @@ def _looks_binary(path):
 
 
 def head_check(url, timeout=15):
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = net.ssl_ctx()
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
@@ -130,9 +127,7 @@ def try_download_manual(name, url, dest, silent=False):
     debug.dbg(f"manual: {name}")
     if not silent:
         info(f"Пробую зеркало: {CYAN}{name}{RESET}")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = net.ssl_ctx()
     existing = dest.stat().st_size if dest.exists() else 0
     headers = {"User-Agent": "Mozilla/5.0"}
     if existing > 0:

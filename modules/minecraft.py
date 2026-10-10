@@ -1,10 +1,8 @@
 """Prism, Legacy, Fabulously Optimized, OptiFine, Fabric."""
 import os
 import re
-import ssl
 import json
 import shutil
-import tarfile
 import zipfile
 import subprocess
 import urllib.request
@@ -20,24 +18,15 @@ from modules.config import (
     SYSTEM_TRUSTSTORE_PATHS, SYSTEM_TRUSTSTORE_PASSWORD,
     FABRIC_META_API, MAVEN_FABRIC, MAVEN_CENTRAL,
 )
+from modules import net
 from modules.download import download_file
 from modules.hash_utils import verify_sha512, verify_sha1, copy_to_clipboard
 from modules.java import find_java, install_portable_java, cmd_install_java
 from modules.prefix import choose_minecraft_dir
 
 
-def _ssl_ctx():
-    """Единый SSL-контекст проекта.
-
-    Red OS ставит корневые сертификаты Минцифры, которые не совпадают с
-    цепочками GitHub/Mojang — проверка сертификата ломает скачивание в
-    школьной сети. Отключаем verification осознанно и в ОДНОМ месте
-    (раньше такой же контекст копировался 6 раз по модулям).
-    """
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+# Единый SSL-контекст проекта — в modules/net.py (раньше копировался 6 раз).
+from modules.net import ssl_ctx as _ssl_ctx
 
 
 def _http_get_json(url, timeout=30):
@@ -230,8 +219,7 @@ def setup_prism():
         return False
     PRISM_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(PRISM_DIR)
+        net.safe_extract_tar(archive, PRISM_DIR)
     except Exception as e:
         debug.dbg_exc(e, "setup_prism/extract")
         err(f"Распаковка: {e}")

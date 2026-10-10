@@ -1,12 +1,12 @@
 """Wine AppImage, DXVK, runexe."""
 import shutil
-import tarfile
 from modules import debug
 from modules.colors import ok, info, CYAN, RESET
 from modules.config import (
     WINE_DIR, WINE_BIN, RUNEXE, DXVK_DIR, DXVK_VERSIONS, DXVK_OVERRIDES,
     WINE_MIRRORS, WINE_PREFIX, make_dxvk_mirrors,
 )
+from modules import net
 from modules.download import download_file
 
 
@@ -47,8 +47,7 @@ def download_dxvk(silent=False):
     if not success:
         return False
     try:
-        with tarfile.open(dxvk_archive, "r:gz") as tar:
-            tar.extractall(WINE_DIR)
+        net.safe_extract_tar(dxvk_archive, WINE_DIR)
         for d in WINE_DIR.iterdir():
             if d.is_dir() and d.name.startswith("dxvk-") and d.name != "dxvk":
                 if DXVK_DIR.exists():

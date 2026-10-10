@@ -1,9 +1,8 @@
 """Поиск и установка портативной JDK 17."""
 import os
 import subprocess
-import tarfile
 from pathlib import Path
-from modules import debug
+from modules import debug, net
 from modules.colors import ok, info, warn, err, hint, MAGENTA, BOLD, RESET
 from modules.config import JAVA_DIR, JDK_MIRRORS
 from modules.download import download_file
@@ -66,8 +65,7 @@ def install_portable_java():
         return False
     info("Распаковываю...")
     try:
-        with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(JAVA_DIR)
+        net.safe_extract_tar(archive, JAVA_DIR)
         archive.unlink()
     except Exception as e:
         debug.dbg_exc(e, "install_portable_java/extract")

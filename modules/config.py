@@ -1,15 +1,70 @@
 """Все константы и пути. Никакой логики — только данные."""
 import os
 import re
+import json
 from pathlib import Path
 
 
 # Прокси-зеркала GitHub (порядок = приоритет).
+# Базовые значения; пользователь может переопределить список зеркал в
+# settings.json без правки кода (см. gh_proxies()).
 _GH_PROXIES = [
     ("ghfast.top",   "https://ghfast.top/"),
     ("ghproxy.net",  "https://ghproxy.net/"),
     ("gh-proxy.com", "https://gh-proxy.com/"),
 ]
+
+# Файл настроек известен здесь заранее (config не импортирует settings.py,
+# но умеет читать из него безопасные user-overrides). Реальный путь —
+# WINE_DIR/settings.json (см. ниже); на время чтения overrides используется
+# угаданный HOME, а после определения HOME путь пересчитывается.
+SETTINGS_FILE = Path.home() / "wine-portable" / "settings.json"
+
+
+def _user_settings():
+    """Кэш settings.json для user-overrides (обновляется при save_settings).
+
+    Назначение: ротация прокси-ключей без правки кода — достаточно поменять
+    "gh_proxies" или "log_keep_days" в ~/wine-portable/settings.json.
+    Любая ошибка файла — тихий откат к дефолтам.
+    """
+    if not getattr(_user_settings, "_loaded", False):
+        data = {}
+        try:
+            if SETTINGS_FILE.exists():
+                raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    data = raw
+        except Exception:
+            data = {}
+        _user_settings._data = data
+        _user_settings._loaded = True
+    return _user_settings._data
+
+
+def reload_user_settings():
+    """Сброс кэша overrides (вызывается из settings.save_settings)."""
+    _user_settings._loaded = False
+
+
+def gh_proxies():
+    """Список GitHub-прокси с учётом overrides из settings.json.
+
+    Формат override: ["https://proxy1/", ...] или
+    [["имя", "https://proxy1/"], ...]. Пустой/битый список -> дефолт.
+    """
+    raw = _user_settings().get("gh_proxies")
+    if not isinstance(raw, list) or not raw:
+        return list(_GH_PROXIES)
+    out = []
+    for item in raw:
+        if isinstance(item, str) and item.startswith("http"):
+            m = re.match(r"https?://([^/]+)", item)
+            out.append((m.group(1), item if item.endswith("/") else item + "/"))
+        elif (isinstance(item, (list, tuple)) and len(item) == 2
+              and all(isinstance(x, str) for x in item)):
+            out.append((item[0], item[1]))
+    return out or list(_GH_PROXIES)
 
 
 # ---------- ПУТИ ----------
@@ -52,7 +107,11 @@ WINE_PREFIX = DEFAULT_PREFIX              # backward-compat алиас
 
 HISTORY_FILE = WINE_DIR / "history.json"
 CACHE_FILE = WINE_DIR / ".mirror_cache"
+# SETTINGS_FILE уже был объявлен в начале файла (для user-overrides) —
+# пересчитываем на надёжный HOME и сбрасываем кэш, чтобы overrides
+# перечитались с правильного пути.
 SETTINGS_FILE = WINE_DIR / "settings.json"
+reload_user_settings()
 
 WINE_BIN = WINE_DIR / "wine.AppImage"
 RUNEXE = WINE_DIR / "runexe"
@@ -81,7 +140,10 @@ EXCLUDE_DIRS = {
 
 SUPPORTED_EXT = (".exe", ".lnk", ".msi")
 
-# ---------- НАСТРОЙКИ ЗАГРУЗКИ ----------
+# ---------- НАСТРОЙКИ ЗАГРУЗКИ / ПОВЕДЕНИЯ (runtime-флаги) ----------
+# Дефолты; реальные значения берёт settings.apply_settings() из
+# settings.json (DEFAULT_SETTINGS ниже), а носителями в рантайме служат
+# флаги modules/state.py. Константы здесь — только стартовые значения.
 MIN_SPEED_KB = 30
 SPEED_TEST_SECONDS = 10
 CONNECT_TIMEOUT = 60
@@ -98,7 +160,6 @@ MIN_ARIA2C_SIZE = 500 * 1024
 
 DXVK_OVERRIDES = "d3d11,dxgi,d3d9,d3d10core=n,b"
 
-# ---------- НОВЫЕ ФИЧИ (флаги) ----------
 USE_PER_GAME_PREFIX = False
 USE_DXVK_HUD = False
 USE_MANGOHUD = False
@@ -108,7 +169,18 @@ LOG_KEEP_DAYS = 30
 
 CURRENT_VERSION = "2.6"
 
-DEFAULT_SETTINGS = {"quiet_mode": False, "use_gamemode": False, "debug_mode": False}
+# Все пользовательские опции — отсюда; меню `settings` и state.* их читают.
+DEFAULT_SETTINGS = {
+    "quiet_mode": False,
+    "use_gamemode": False,
+    "debug_mode": False,
+    "use_dxvk_hud": False,
+    "use_mangohud": False,
+    "use_gamescope": False,
+    "use_tts_notify": False,
+    "use_per_game_prefix": False,
+    "log_keep_days": 30,
+}
 
 # ---------- КОМАНДЫ ----------
 EXPECTED_COMMANDS = [
@@ -120,6 +192,7 @@ EXPECTED_COMMANDS = [
     "export", "gpu-temp", "freegames",
     "worlds", "saveworlds", "loadworlds",
     "gamestatus", "stopgame", "waitgame", "games", "shaders",
+    "fo-autofix",
 ]
 
 # ---------- SYSTEM TRUSTSTORE ДЛЯ JAVA ----------
@@ -250,6 +323,11 @@ MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manif
 MOJANG_RESOURCES = "https://resources.download.minecraft.net/"
 
 
+def _gh_mirror_list(base_url, direct_name="GitHub (прямой)"):
+    """base_url + прокси-зеркала из gh_proxies() (+ прямой адрес в конце)."""
+    return gh_proxies() + [(direct_name, base_url)]
+
+
 def make_github_mirrors(url):
     """Оборачивает ссылку github.com прокси-зеркалами (для плохих сетей).
 
@@ -268,7 +346,7 @@ def make_github_mirrors(url):
     # Сокращённая форма ghuser/repo@tag/file — свои зеркала.
     canonical = _short_github_form(url)
     if canonical:
-        return [(name, f"{prefix}{canonical}") for name, prefix in _GH_PROXIES]
+        return [(name, f"{prefix}{canonical}") for name, prefix in gh_proxies()]
 
     if "github.com" not in url:
         return []
@@ -285,7 +363,7 @@ def make_github_mirrors(url):
         return []
     # Редиректы /releases/latest и /releases/tag/<t> — прямой download-ассет
     # неизвестен; оборачиваем ссылку целиком (прокси следуют редиректам).
-    return [(name, f"{prefix}{url}") for name, prefix in _GH_PROXIES]
+    return [(name, f"{prefix}{url}") for name, prefix in gh_proxies()]
 
 
 def _short_github_form(url):
@@ -309,14 +387,7 @@ def _short_github_form(url):
 def make_dxvk_mirrors(version):
     fname = f"dxvk-{version.lstrip('v')}.tar.gz"
     base = f"https://github.com/doitsujin/dxvk/releases/download/{version}/{fname}"
-    return [
-        ("ghfast.top",       f"https://ghfast.top/{base}"),
-        ("ghproxy.net",      f"https://ghproxy.net/{base}"),
-        ("gh-proxy.com",     f"https://gh-proxy.com/{base}"),
-        ("ghproxy.cc",       f"https://ghproxy.cc/{base}"),
-        ("gh.llkk.cc",       f"https://gh.llkk.cc/{base}"),
-        ("GitHub (прямой)",  base),
-    ]
+    return _gh_mirror_list(base)
 
 
 # ---------- КАТАЛОГ БЕСПЛАТНЫХ ИГР ----------

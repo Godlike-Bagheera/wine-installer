@@ -29,13 +29,27 @@ def save_settings(data):
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        # gh_proxies()/log_keep_days из config читают кэш overrides — обновляем
+        from modules import config
+        config.reload_user_settings()
     except Exception as e:
         debug.dbg_exc(e, "save_settings")
 
 
 def apply_settings():
+    """Загружает settings.json в runtime-флаги state.* (единственный мост)."""
     s = load_settings()
-    state.QUIET_MODE = s.get("quiet_mode", False)
+    state.QUIET_MODE = bool(s.get("quiet_mode", False))
+    state.USE_DXVK_HUD = bool(s.get("use_dxvk_hud", False))
+    state.USE_MANGOHUD = bool(s.get("use_mangohud", False))
+    state.USE_GAMESCOPE = bool(s.get("use_gamescope", False))
+    state.USE_TTS_NOTIFY = bool(s.get("use_tts_notify", False))
+    state.USE_PER_GAME_PREFIX = bool(s.get("use_per_game_prefix", False))
+    try:
+        days = int(s.get("log_keep_days", 30))
+        state.LOG_KEEP_DAYS = days if 1 <= days <= 365 else 30
+    except (TypeError, ValueError):
+        state.LOG_KEEP_DAYS = 30
     if s.get("debug_mode", False) and not state.DEBUG_MODE:
         state.DEBUG_MODE = True
         debug.dbg("Дебаг включён из настроек")

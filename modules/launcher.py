@@ -12,12 +12,11 @@ import shutil
 import threading
 import subprocess
 from pathlib import Path
-from modules import debug
+from modules import debug, state
 from modules.colors import ok, info, warn, err, hint, CYAN, BOLD, RESET
 from modules.config import (
     HOME, WINE_BIN, LOG_DIR, PRIORITY_DIRS, EXCLUDE_DIRS,
     SUPPORTED_EXT, OK_RUN_SECONDS,
-    USE_GAMESCOPE, USE_TTS_NOTIFY,
 )
 from modules.prefix import ensure_prefix, get_wine_env
 from modules.wine import install_dxvk_to_wine
@@ -247,7 +246,7 @@ def find_exe(name):
 
 
 def _tts_say(text):
-    if not USE_TTS_NOTIFY:
+    if not state.USE_TTS_NOTIFY:
         return
     spd = shutil.which("spd-say")
     if not spd:
@@ -270,7 +269,7 @@ def _build_cmd(path, use_gm):
     if use_gm:
         base_cmd = ["gamemoderun"] + base_cmd
 
-    if USE_GAMESCOPE:
+    if state.USE_GAMESCOPE:
         gs = shutil.which("gamescope")
         if gs:
             base_cmd = [gs, "-W", "1920", "-H", "1080", "-f", "--"] + base_cmd
@@ -302,6 +301,7 @@ def _finalize_game(path, name, log_path, start_time, rc, missing_pkgs):
 def _watch_game(proc, logf, path, name, log_path, start_time):
     """Фоновый поток: читает вывод игры в лог пока процесс жив."""
     missing_pkgs = set()
+    crashed = False   # чтение stdout упало — код возврата получить нельзя
     try:
         for line in proc.stdout:
             try:
@@ -323,6 +323,7 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
                 debug.dbg(f"detect_missing_libs: {e}")
     except Exception as e:
         debug.dbg_exc(e, f"_watch_game/{name}")
+        crashed = True
     try:
         rc = proc.wait(timeout=10)
     except Exception:
@@ -332,6 +333,10 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
             logf.close()
         except Exception:
             pass
+    if crashed and rc == 0:
+        # Код 0 мог быть недостоверным (процесс ещё жив, вывод потерян) —
+        # не засчитываем «успех», чтобы история не врала о статусе игры.
+        rc = -1
     try:
         _finalize_game(path, name, log_path, start_time, rc, missing_pkgs)
     except Exception as e:
