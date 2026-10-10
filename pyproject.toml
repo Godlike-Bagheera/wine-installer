@@ -19,6 +19,17 @@ dev = ["ruff"]
 [project.scripts]
 wine-launcher = "wine:main"
 
+[tool.pytest.ini_options]
+# Тесты — standalone-скрипты (python tests/test_x.py), а не pytest-наборы.
+# Стандартный Python-сборщик отключён в tests/conftest.py (хук
+# pytest_pycollect_makemodule -> None): импорт test_*.py = выполнение
+# скрипта + sys.exit -> INTERNALERROR ещё на стадии collection. Реальные
+# тесты отдаёт wrapper test_standalone_scripts из tests/conftest.py: он
+# гоняет каждый tests/test_*.py отдельным subprocess'ом и транслирует код
+# возврата в успех/провал. Никаких --ignore здесь: conftest покрывает и
+# `pytest`, и `pytest tests/`, и `pytest tests/test_x.py`.
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py39"

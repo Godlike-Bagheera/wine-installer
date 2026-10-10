@@ -10,7 +10,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="fakehome_"))
+# fake-HOME: всегда свежий tempdir (setdefault не сработал бы, если HOME
+# уже задан в окружении — тесты начали бы трогать реальный ~/.minecraft).
+# WI_FAKE_HOME=1 запрещает config._resolve_home фолбэк на passwd-дом (/root).
+os.environ["HOME"] = tempfile.mkdtemp(prefix="fakehome_")
+os.environ["WI_FAKE_HOME"] = "1"
 
 from modules.config import make_github_mirrors   # noqa: E402
 import modules.shaders as sh                     # noqa: E402

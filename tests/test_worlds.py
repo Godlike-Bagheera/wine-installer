@@ -22,6 +22,9 @@ sys.path.insert(0, str(ROOT))
 # изолируем fake-HOME ДО импорта config (он резолвит HOME при импорте)
 FAKE_HOME = Path(tempfile.mkdtemp(prefix="fakehome_worlds_"))
 os.environ["HOME"] = str(FAKE_HOME)
+# WI_FAKE_HOME=1 запрещает config._resolve_home фолбэк на passwd-дом (/root):
+# иначе под root недоступный fake-HOME молча подменяется реальным /root.
+os.environ["WI_FAKE_HOME"] = "1"
 
 from modules import worlds, prefix  # noqa: E402
 from modules.config import HOME     # noqa: E402
