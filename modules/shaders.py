@@ -63,12 +63,7 @@ OFFLINE_SHADERS = [
 ]
 
 
-def _ssl_ctx():
-    import ssl
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+from modules.net import ssl_ctx as _ssl_ctx  # единый SSL-контекст проекта
 
 
 # ─────────────────────────────────────────────────────────────────────

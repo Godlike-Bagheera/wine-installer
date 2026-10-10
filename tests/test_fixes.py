@@ -111,9 +111,13 @@ import modules.ui as ui                                   # noqa: E402
 for c in ("gamestatus", "stopgame", "waitgame", "games", "shaders"):
     check(f"EXPECTED_COMMANDS содержит '{c}'", c in EXPECTED_COMMANDS)
 
-src_pi = inspect.getsource(ui.process_input)
+src_pi = inspect.getsource(ui.process_input) + inspect.getsource(ui.resolve_command)
 for c in EXPECTED_COMMANDS:
-    check(f"process_input обрабатывает '{c}'", c in src_pi)
+    # команда считается обработанной, если она ключ реестра (данные),
+    # ключ выхода (exit-команды) или упоминается в коде маршрутизации
+    check(f"process_input обрабатывает '{c}'",
+          c in ui.COMMAND_REGISTRY or c in ui.ARGS_COMMANDS
+          or c in ui.EXIT_COMMANDS or c in src_pi)
 
 routed = {
     "gamestatus": "cmd_game_status",

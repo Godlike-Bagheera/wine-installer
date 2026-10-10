@@ -35,9 +35,8 @@ def find_disk_d():
             p = Path(p)
             if p.is_dir() and p not in candidates:
                 candidates.append(p)
-        except Exception:
-            pass
-
+        except Exception as e:
+            debug.dbg_exc(e, "worlds")
     # 1) Рабочий стол (рус/англ имена из config.DESKTOP_DIRS + варианты)
     for desk in DESKTOP_DIRS + [HOME / "РабочийСтол", HOME / "рабочий стол"]:
         if not desk.is_dir():

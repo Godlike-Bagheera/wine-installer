@@ -4,17 +4,18 @@ import re
 import time
 import subprocess
 from pathlib import Path
-from modules import debug
+from modules import debug, state
 from modules.colors import ok, info, err, BOLD, RESET
 from modules.config import (
     WINE_PREFIX, WINE_BIN, DXVK_DIR, DXVK_OVERRIDES,
-    PREFIXES_DIR, USE_PER_GAME_PREFIX, HOME, DEFAULT_PREFIX,
-    USE_DXVK_HUD, USE_MANGOHUD,
+    PREFIXES_DIR, HOME, DEFAULT_PREFIX,
 )
 
 
 def get_prefix_path(exe_path=None):
-    if USE_PER_GAME_PREFIX and exe_path is not None:
+    # Флаг читаем из state (ставится settings.apply_settings из settings.json),
+    # а не из константы config — иначе настройка не применялась бы без рестарта.
+    if state.USE_PER_GAME_PREFIX and exe_path is not None:
         safe_name = re.sub(r"[^\w\-]", "_", Path(exe_path).stem)[:40]
         return PREFIXES_DIR / safe_name
     return WINE_PREFIX
@@ -26,9 +27,9 @@ def get_wine_env(use_dxvk=True, exe_path=None):
     env["WINEPREFIX"] = str(prefix)
     if use_dxvk and DXVK_DIR.exists():
         env["WINEDLLOVERRIDES"] = DXVK_OVERRIDES
-    if USE_DXVK_HUD:
+    if state.USE_DXVK_HUD:
         env["DXVK_HUD"] = "fps,frametimes,gpuload,devinfo"
-    if USE_MANGOHUD:
+    if state.USE_MANGOHUD:
         env["MANGOHUD"] = "1"
     return env
 
@@ -42,7 +43,7 @@ def ensure_prefix(force_boot=False, exe_path=None):
         return True
 
     if not system32.exists():
-        if USE_PER_GAME_PREFIX and exe_path is not None:
+        if state.USE_PER_GAME_PREFIX and exe_path is not None:
             info(f"{BOLD}Создаю отдельную «бутылку» для {Path(exe_path).stem} (1–3 минуты)...{RESET}")
         else:
             info(f"{BOLD}Создаю Wine-префикс (1–3 минуты)...{RESET}")
@@ -64,8 +65,8 @@ def ensure_prefix(force_boot=False, exe_path=None):
     if system32.exists():
         try:
             marker.write_text(str(time.time()), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "prefix")
         ok("Префикс готов")
         return True
 
@@ -141,9 +142,8 @@ def find_minecraft_dirs(limit=12):
             if _looks_like_mc_dir(p) and rp not in seen:
                 seen.add(rp)
                 candidates.append(p)
-        except Exception:
-            pass
-
+        except Exception as e:
+            debug.dbg_exc(e, "prefix")
     seen = set()
 
     # 1) Прямые типовые пути
@@ -167,9 +167,8 @@ def find_minecraft_dirs(limit=12):
                 add(user / ".minecraft")
                 add(user / "AppData" / "Roaming" / ".minecraft")
                 add(user / "AppData" / "Roaming" / ".tlauncher" / "legacy" / "Minecraft" / "game")
-    except Exception:
-        pass
-
+    except Exception as e:
+        debug.dbg_exc(e, "prefix")
     # 3) Ограниченный обход HOME глубиной 3 на предмет папок .minecraft
     try:
         skip = {"wine-portable", ".cache", ".local", ".config", ".git",
@@ -188,9 +187,8 @@ def find_minecraft_dirs(limit=12):
                         continue
             except Exception:
                 continue
-    except Exception:
-        pass
-
+    except Exception as e:
+        debug.dbg_exc(e, "prefix")
     def score(p):
         try:
             vdir = p / "versions"

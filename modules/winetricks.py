@@ -1,10 +1,9 @@
 """winetricks + авто-фиксы DLL."""
 import os
 import re
-import ssl
 import subprocess
 import urllib.request
-from modules import debug
+from modules import debug, net
 from modules.colors import ok, info, warn, err, fix, DIM, RESET
 from modules.config import (
     BIN_DIR, WINETRICKS_BIN, MIN_WINETRICKS_SIZE,
@@ -81,9 +80,7 @@ def download_winetricks():
     for name, url in WINETRICKS_MIRRORS:
         debug.dbg(f"winetricks: {name}")
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = net.ssl_ctx()
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             r = urllib.request.urlopen(req, context=ctx, timeout=CONNECT_TIMEOUT)
             data = r.read()
@@ -158,8 +155,8 @@ def install_via_winetricks(pkgs, already_installed, exe_path=None):
         except Exception:
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "winetricks")
         raise
     if proc.returncode == 0:
         ok(f"Установлено: {', '.join(to_install)}")

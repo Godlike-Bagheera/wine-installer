@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wine-installer"
+version = "2.6"
+description = "Портативный Wine-лаунчер для Linux: игры, Minecraft, DXVK/Vulkan, шейдеры, миры"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Godlike-Bagheera" }]
+# Ядро использует только стандартную библиотеку Python.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff"]
+
+[project.scripts]
+wine-launcher = "wine:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E402"]
+
+[tool.setuptools]
+packages = ["modules"]
+py-modules = ["wine"]
