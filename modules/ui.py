@@ -23,7 +23,7 @@ from modules.launcher import (
 from modules.java import find_java, cmd_install_java
 from modules.minecraft import (
     cmd_minecraft, setup_fabulously_optimized, setup_optifine,
-    setup_prism, setup_legacy,
+    setup_prism, setup_legacy, cmd_fo_autofix,
 )
 from modules.commands import (
     cmd_debug, cmd_debugreport, cmd_reset, cmd_vulkan, cmd_verify,
@@ -100,6 +100,7 @@ def print_help():
     print(f"{BOLD}── Minecraft ─────────────────────────────────────{RESET}")
     print(f"  {CYAN}minecraft{RESET}            — меню (все варианты)")
     print(f"  {CYAN}fo{RESET}                   — Fabulously Optimized")
+    print(f"  {CYAN}fo-autofix{RESET}           — диагностика/починка .minecraft")
     print(f"  {CYAN}optifine{RESET}             — OptiFine")
     print(f"  {CYAN}prism{RESET}                — Prism Launcher")
     print(f"  {CYAN}legacy{RESET}               — Legacy Launcher")
@@ -258,6 +259,9 @@ def process_input(name, last_exe):
         return last_exe, True
     if low in ("minecraft fo", "майнкрафт fo", "fo"):
         setup_fabulously_optimized()
+        return last_exe, True
+    if low in ("fo-autofix", "foautofix", "фо-автофикс", "автофикс"):
+        cmd_fo_autofix()
         return last_exe, True
     if low in ("minecraft optifine", "майнкрафт optifine", "optifine", "оф"):
         setup_optifine()
