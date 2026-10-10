@@ -63,7 +63,11 @@ OFFLINE_SHADERS = [
 ]
 
 
-from modules.net import ssl_ctx as _ssl_ctx  # единый SSL-контекст проекта
+def _http_get(url, timeout=30, headers=None):
+    """GET с фолбеком строгой проверки сертификатов (см. net.ssl_ctx)."""
+    from modules.download import open_checked
+    req = urllib.request.Request(url, headers=headers or {})
+    return open_checked(req, timeout)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -286,8 +290,8 @@ def fetch_modrinth_shaders(query="shader"):
     """Список [{name, downloads, desc, files:[urls]}] или [] при ошибке сети."""
     url = MODRINTH_SEARCH.format(query=query)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.6"})
-        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=15) as r:
+        with _http_get(url, timeout=15,
+                       headers={"User-Agent": "wine-installer/2.6"}) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
     except Exception as e:
         debug.dbg(f"modrinth search: {e}")
@@ -300,10 +304,10 @@ def fetch_modrinth_shaders(query="shader"):
             # у search-результата файлов может не быть — берём список версий проекта
             pid = hit.get("project_id") or hit.get("slug")
             try:
-                pv = urllib.request.Request(
-                    f"https://api.modrinth.com/v2/project/{pid}/version?loaders=%5B%5D",
-                    headers={"User-Agent": "wine-installer/2.6"})
-                with urllib.request.urlopen(pv, context=_ssl_ctx(), timeout=15) as r2:
+                with _http_get(
+                        f"https://api.modrinth.com/v2/project/{pid}/version?loaders=%5B%5D",
+                        timeout=15,
+                        headers={"User-Agent": "wine-installer/2.6"}) as r2:
                     vlist = json.loads(r2.read().decode("utf-8", errors="replace"))
                 for v in vlist[:1]:
                     urls = [f.get("url") for f in v.get("files", []) if f.get("url")]

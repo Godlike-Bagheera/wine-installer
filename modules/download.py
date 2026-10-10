@@ -1,5 +1,6 @@
 """Скачивание с мультизеркал, докачкой, slow-mode, aria2c, HEAD-проверкой."""
 import os
+import ssl
 import time
 import subprocess
 import urllib.request
@@ -79,11 +80,36 @@ def _looks_binary(path):
         return False
 
 
+def open_checked(req, timeout):
+    """urlopen с единым SSL-контекстом и фолбеком на CERT_NONE.
+
+    Сначала строгая проверка (стандартные CA + системные бандлы RED OS).
+    Если сертификат не прошёл (битый ca-certificates, неизвестный корень
+    Минцифры/школьного MITM-прокси) — одна повторная попытка без проверки
+    с предупреждением в stderr/debug-лог. Целостность содержимого при этом
+    по-прежнему держат SHA-хеши и сигнатуры файлов. Фолбек отключается
+    явно: WI_INSECURE_SSL=0.
+    """
+    try:
+        return urllib.request.urlopen(req, context=net.ssl_ctx(),
+                                      timeout=timeout)
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", None)
+        cert_bad = isinstance(reason, ssl.SSLCertVerificationError) or \
+            "CERTIFICATE_VERIFY_FAILED" in str(reason)
+        if not cert_bad or os.environ.get("WI_INSECURE_SSL") == "0":
+            raise
+        warn(f"SSL: сертификат не прошёл проверку ({getattr(reason, 'verify_message', reason)}); "
+             "пробую без проверки. Закрепить: WI_INSECURE_SSL=1, запретить фолбек: WI_INSECURE_SSL=0")
+        debug.dbg(f"open-checked-fallback: {req.full_url}", level="WARN")
+        return urllib.request.urlopen(req, context=net.ssl_ctx(insecure=True),
+                                      timeout=timeout)
+
+
 def head_check(url, timeout=15):
-    ctx = net.ssl_ctx()
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+        with open_checked(req, timeout) as r:
             size = int(r.headers.get("Content-Length", 0))
             return True, size
     except urllib.error.HTTPError as e:
@@ -105,7 +131,7 @@ def download_with_aria2(url, dest, silent=False):
             "--summary-interval=5",
             "--console-log-level=warn" if not silent else "--console-log-level=error",
             "--allow-overwrite=true", "--continue=true",
-            "--check-certificate=false",
+            "--check-certificate=true" if os.environ.get("WI_INSECURE_SSL") != "1" else "--check-certificate=false",
             "-d", str(dest.parent), "-o", dest.name, url,
         ]
         r = subprocess.run(cmd, check=False)
@@ -125,7 +151,6 @@ def try_download_manual(name, url, dest, silent=False):
     debug.dbg(f"manual: {name}")
     if not silent:
         info(f"Пробую зеркало: {CYAN}{name}{RESET}")
-    ctx = net.ssl_ctx()
     existing = dest.stat().st_size if dest.exists() else 0
     headers = {"User-Agent": "Mozilla/5.0"}
     if existing > 0:
@@ -134,7 +159,7 @@ def try_download_manual(name, url, dest, silent=False):
     # --- Запрос с Range; при 416 — удаляем неполный/полный файл, качаем с нуля ---
     try:
         req = urllib.request.Request(url, headers=headers)
-        r = urllib.request.urlopen(req, context=ctx, timeout=CONNECT_TIMEOUT)
+        r = open_checked(req, CONNECT_TIMEOUT)
     except urllib.error.HTTPError as e:
         if e.code == 416 and existing > 0:
             # 416 = Range за пределами файла. Значит файл уже полный
@@ -149,7 +174,7 @@ def try_download_manual(name, url, dest, silent=False):
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "Mozilla/5.0"}
                 )
-                r = urllib.request.urlopen(req, context=ctx, timeout=CONNECT_TIMEOUT)
+                r = open_checked(req, CONNECT_TIMEOUT)
             except Exception as e2:
                 debug.dbg_exc(e2, f"connect-no-range/{name}")
                 if not silent:

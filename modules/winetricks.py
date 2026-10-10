@@ -3,7 +3,7 @@ import os
 import re
 import subprocess
 import urllib.request
-from modules import debug, net
+from modules import debug
 from modules.colors import ok, info, warn, err, fix, DIM, RESET
 from modules.config import (
     BIN_DIR, WINETRICKS_BIN, MIN_WINETRICKS_SIZE,
@@ -80,9 +80,9 @@ def download_winetricks():
     for name, url in WINETRICKS_MIRRORS:
         debug.dbg(f"winetricks: {name}")
         try:
-            ctx = net.ssl_ctx()
+            from modules.download import open_checked
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            r = urllib.request.urlopen(req, context=ctx, timeout=CONNECT_TIMEOUT)
+            r = open_checked(req, CONNECT_TIMEOUT)
             data = r.read()
             r.close()
             if len(data) > MIN_WINETRICKS_SIZE:
