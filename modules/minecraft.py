@@ -211,10 +211,49 @@ def _java_env_with_truststore():
 #  PRISM LAUNCHER
 # ═══════════════════════════════════════════════════════════════════
 
+def _is_executable_candidate(name):
+    """Имена исполняемых файлов portable-сборки Prism (без расширения)."""
+    return name in ("PrismLauncher", "AppRun") or \
+        re.fullmatch(r"PrismLauncher(\.linux)?(-x86_64)?", name) is not None
+
+
+def _find_prism_exe():
+    """Ищет НАСТОЯЩИЙ бинарник лаунчера среди файлов (не папок!).
+
+    Раньше условие `f.startswith("PrismLauncher")` матчило и директории
+    вида `PrismLauncherIcons/` — chmod применялся к папке, а пользователю
+    показывался путь до неё вместо исполняемого файла, и «открыть»
+    такой «лаунчер» было невозможно. Теперь берём только файлы и только
+    точные имена бинарников; если файлов-кандидатов несколько — самый
+    крупный ELF (реальный бинарник больше любых заглушек/скриптов).
+    """
+    candidates = []
+    for root, dirs, files in os.walk(PRISM_DIR):
+        for f in files:
+            p = Path(root) / f
+            if not _is_executable_candidate(f):
+                continue
+            try:
+                if not p.is_file():
+                    continue
+                size = p.stat().st_size
+            except OSError:
+                continue
+            candidates.append((size, p))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates[0][1]
+
+
 def setup_prism():
     info(f"{BOLD}Установка Prism Launcher{RESET}")
     archive = WINE_DIR / "prism.tar.gz"
-    if not download_file([("direct", PRISM_URL)], archive, "Prism Launcher", min_size_mb=3):
+    # Зеркала: раньше качали ТОЛЬКО напрямую с github.com — в медленных/
+    # блокирующих сетях Prism не скачивался вообще. Добавлены прокси-зеркала
+    # (ghfast.top / ghproxy.net / ...), как для всех остальных загрузок.
+    mirrors = [("GitHub (прямой)", PRISM_URL)] + make_github_mirrors(PRISM_URL)
+    if not download_file(mirrors, archive, "Prism Launcher", min_size_mb=3):
         err("Не удалось скачать Prism")
         return False
     PRISM_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,16 +263,12 @@ def setup_prism():
         debug.dbg_exc(e, "setup_prism/extract")
         err(f"Распаковка: {e}")
         return False
-    exe = None
-    for root, dirs, files in os.walk(PRISM_DIR):
-        for f in files:
-            if f == "PrismLauncher" or f.startswith("PrismLauncher"):
-                exe = Path(root) / f
-                exe.chmod(0o755)
-                break
-        if exe:
-            break
+    exe = _find_prism_exe()
     if exe:
+        try:
+            exe.chmod(0o755)  # на случай архива без флага +x у бинарника
+        except OSError as e:
+            debug.dbg_exc(e, "setup_prism/chmod")
         ok(f"Prism: {exe}")
         hint(f"Запусти: {exe}")
         return True
