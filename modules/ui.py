@@ -17,7 +17,7 @@ from modules.settings import (
     load_settings, save_settings, apply_settings,
 )
 from modules.launcher import (
-    launch, find_exe, stop_all_games,
+    launch, find_exe, stop_all_games, _find_native_launcher,
     cmd_game_status, cmd_stopgame, cmd_waitgame, cmd_games_list,
 )
 from modules.java import find_java, cmd_install_java
@@ -340,6 +340,16 @@ def process_input(name, last_exe):
             return str(path), True
         err(f"Нет игры #{num}")
         return last_exe, True
+    # Нативные Linux-лаунчеры (Prism и др.): их обычный поиск ниже ищет
+    # только *.exe/*.lnk/*.msi, поэтому «PrismLauncher» после успешной
+    # загрузки выдавал «не найден». Ищем точное имя среди исполняемых
+    # файлов PRISM_DIR и запускаем БЕЗ Wine.
+    if not name.startswith("/") and Path(name).suffix.lower() not in \
+            (".exe", ".lnk", ".msi"):
+        native = _find_native_launcher(low)
+        if native is not None:
+            launch(native, engine="native")
+            return str(native), True
     info(f"Ищу '{name}'...")
     results = find_exe(name)
     if not results:

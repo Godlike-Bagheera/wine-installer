@@ -211,13 +211,59 @@ def scan_dir(base, targets, max_depth):
     return found
 
 
+def _find_native_launcher(name):
+    """Нативные (Linux, НЕ wine/.exe) лаунчеры: Prism Launcher и т.п.
+
+    Ищем точное имя файла среди исполняемых файлов в PRISM_DIR — только
+    файлы, не папки (папка `PrismLauncher/` или `PrismLauncherIcons/`
+    «запускается» невозможным образом). Если кандидатов несколько —
+    берём самый крупный (настоящий ELF-бинарник больше заглушек).
+    Возвращает Path или None.
+    """
+    from modules.config import PRISM_DIR
+    try:
+        target = name.lower().strip()
+    except Exception:
+        return None
+    if not target or not PRISM_DIR.exists():
+        return None
+    candidates = []
+    for root, dirs, files in os.walk(PRISM_DIR):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".")]
+        for f in files:
+            if f.lower() != target:
+                continue
+            p = Path(root) / f
+            try:
+                if not p.is_file() or not os.access(p, os.X_OK):
+                    continue
+                size = p.stat().st_size
+            except OSError:
+                continue
+            candidates.append((size, p))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    return candidates[0][1]
+
+
+def launch_native(path):
+    """Запуск нативного Linux-приложения (без Wine) через общий механизм."""
+    info(f"Движок: {BOLD}нативный Linux{RESET} (без Wine)")
+    return launch(path, engine="native")
+
+
 def find_exe(name):
     import sys
     p = Path(name).expanduser()
     if p.is_absolute():
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXT:
             return [p]
+        # без расширения: может быть уже скачанный нативный бинарник
+        # (например ~/prism/.../PrismLauncher) — проверяем до перебора .exe
         if not p.suffix:
+            if p.is_file() and os.access(p, os.X_OK):
+                return [p]
             for ext in SUPPORTED_EXT:
                 candidate = Path(str(p) + ext)
                 if candidate.is_file():
@@ -341,8 +387,87 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
         debug.dbg_exc(e, "_finalize_game")
 
 
-def launch(path):
-    """Запуск игры в фоновом режиме: терминал сразу свободен для команд."""
+def _is_elf_binary(path):
+    """Настоящий ли это исполняемый ELF-файл (нативный Linux-бинарник)?"""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def launch(path, engine=None):
+    """Запуск игры в фоновом режиме: терминал сразу свободен для команд.
+
+    engine="native" — запускать бинарник напрямую (Prism Launcher и другие
+    Linux-приложения). Без явного указания движок определяется сам: файл
+    без wine-расширения (.exe/.lnk/.msi), который является ELF или AppRun
+    portable-архива, запускается НАПРЯМУЮ; раньше он попадал в `wine <файл>`
+    и «открыться» не мог.
+    """
+    suffix = path.suffix.lower()
+    if engine is None and suffix not in SUPPORTED_EXT:
+        if _is_elf_binary(path) or path.name == "AppRun":
+            engine = "native"
+    if engine == "native":
+        if not os.access(path, os.X_OK):
+            try:
+                path.chmod(path.stat().st_mode | 0o111)
+                hint("Дописал флаг исполнения (+x) на бинарнике")
+            except OSError as e:
+                debug.dbg_exc(e, "launch/native-chmod")
+        cmd = [str(path)]
+        if shutil.which("gamemoderun") and gamemode_available():
+            settings = load_settings()
+            if settings.get("use_gamemode", False):
+                cmd = ["gamemoderun"] + cmd
+        env = None
+        # Portable-сборки Prism (AppImage-подобные) могут требовать FUSE —
+        # предупреждаем заранее, как это делает check_host_deps для Wine.
+        if path.name == "AppRun":
+            import subprocess as _sp
+            has_fuse = (_sp.run(["bash", "-c", "test -e /dev/fuse"]).returncode == 0
+                        or shutil.which("squashfuse") is not None)
+            if not has_fuse:
+                warn("Для portable AppRun нужен FUSE: sudo apt install fuse libfuse2")
+        log_path = get_log_path(path)
+        name = _unique_name(path.stem)
+        _taken_names.add(name)
+        info(f"Движок: {BOLD}нативный Linux{RESET} (без Wine)")
+        info(f"Запускаю: {path}")
+        hint(f"Лог: {log_path}")
+        print()
+        _tts_say(f"Запускаю {path.stem}")
+        start_time = time.time()
+        try:
+            logf = open(log_path, "w", encoding="utf-8", errors="replace")
+        except OSError as e:
+            err(f"Не могу создать лог: {e}")
+            return
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=str(path.parent), env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, encoding="utf-8", errors="replace",
+            )
+        except Exception as e:
+            debug.dbg_exc(e, "launch/native-Popen")
+            err(f"Ошибка запуска: {e}")
+            try:
+                logf.close()
+            except OSError:
+                pass
+            _taken_names.discard(name)
+            update_history(path, status="crash", duration=time.time() - start_time)
+            return
+        gamestate.register(name, proc, path, log=log_path)
+        t = threading.Thread(target=_watch_game,
+                             args=(proc, logf, path, name, log_path, start_time),
+                             daemon=True, name=f"gamewatch-{name}")
+        t.start()
+        ok(f"Игра '{name}' запущена в фоне — терминал доступен.")
+        hint("Команды: gamestatus, stopgame <имя|all>, waitgame <имя>, games")
+        return
     active = gamestate.running()
     for name, g in sorted(active.items()):
         print(f"  {CYAN}[{name}]{RESET} идёт {gamestate.fmt_elapsed(g['start'])}")
