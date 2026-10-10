@@ -1,4 +1,5 @@
 """Wine-префикс, пути, окружение, per-game «бутылки»."""
+import hashlib
 import os
 import re
 import time
@@ -16,8 +17,15 @@ def get_prefix_path(exe_path=None):
     # Флаг читаем из state (ставится settings.apply_settings из settings.json),
     # а не из константы config — иначе настройка не применялась бы без рестарта.
     if state.USE_PER_GAME_PREFIX and exe_path is not None:
-        safe_name = re.sub(r"[^\w\-]", "_", Path(exe_path).stem)[:40]
-        return PREFIXES_DIR / safe_name
+        p = Path(exe_path)
+        safe_name = re.sub(r"[^\w\-]", "_", p.stem)[:40]
+        # Разные игры часто имеют одинаковое имя исполняемого файла
+        # (game.exe, launcher.exe, start.exe...) — раньше их бутылки
+        # молча сливались в один префикс PREFIXES_DIR/<stem>. Добавляем
+        # короткий хеш полного пути exe: коллизия исчезает, путь остаётся
+        # детерминированным (одна игра = одна бутылка).
+        digest = hashlib.sha1(str(p.resolve()).encode("utf-8")).hexdigest()[:8]
+        return PREFIXES_DIR / f"{safe_name}-{digest}"
     return WINE_PREFIX
 
 
@@ -207,13 +215,20 @@ def find_minecraft_dirs(limit=12):
 
 def choose_minecraft_dir(auto=True):
     """Возвращает выбранную директорию игры (Path) или None.
-    Если найдена одна — использует её; если несколько — спрашивает."""
+
+    Если найдена одна — берётся она; если несколько и auto=False —
+    спрашиваем пользователя. Раньше условие было инвертировано
+    (`if len(found) == 1 or auto: return found[0]`) и ветка опроса была
+    недостижимой: при нескольких папках всегда молча бралась первая
+    попавшаяся игра, а интерактивный выбор не предлагался никогда.
+    """
     found = find_minecraft_dirs()
     if not found:
         return None
-    if len(found) == 1 or auto:
-        if len(found) > 1:
-            info(f"Найдено несколько директорий игры, беру первую: {found[0]}")
+    if len(found) == 1:
+        return found[0]
+    if auto:
+        info(f"Найдено несколько директорий игры, беру первую: {found[0]}")
         return found[0]
     print(f"{BOLD}Найдено несколько папок Minecraft:{RESET}")
     for i, p in enumerate(found, 1):

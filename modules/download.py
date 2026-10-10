@@ -80,15 +80,27 @@ def _looks_binary(path):
         return False
 
 
-def open_checked(req, timeout):
-    """urlopen с единым SSL-контекстом и фолбеком на CERT_NONE.
+def _insecure_fallback_allowed():
+    """Явно ли пользователь разрешил insecure-фолбек (WI_INSECURE_SSL=1).
 
-    Сначала строгая проверка (стандартные CA + системные бандлы RED OS).
-    Если сертификат не прошёл (битый ca-certificates, неизвестный корень
-    Минцифры/школьного MITM-прокси) — одна повторная попытка без проверки
-    с предупреждением в stderr/debug-лог. Целостность содержимого при этом
-    по-прежнему держат SHA-хеши и сигнатуры файлов. Фолбек отключается
-    явно: WI_INSECURE_SSL=0.
+    Значение по умолчанию — НЕ разрешать. Молча подменять строгую проверку
+    сертификатов CERT_NONE нельзя: это превращает любую ошибку TLS (или
+    MITM-атаку с неподписанным сертификатом) в тихий downgrade. Если
+    школьный MITM-прокси реально мешает, решение осознанно принимает
+    пользователь: WI_INSECURE_SSL=1 (см. README).
+    """
+    return os.environ.get("WI_INSECURE_SSL") == "1"
+
+
+def open_checked(req, timeout):
+    """urlopen с единым (строгим) SSL-контекстом net.ssl_ctx().
+
+    Проверка сертификатов строгая всегда: стандартные CA + системные
+    бандлы RED OS (корни Минцифры/школьного MITM-прокси, если они
+    установлены в доверие системы). Автоматический фолбек на CERT_NONE
+    убран как дыра в безопасности; вместо него при SSL ошибках печатается
+    понятная подсказка. Insecure-режим включается ТОЛЬКО явно:
+    WI_INSECURE_SSL=1 (тогда net.ssl_ctx сам строит CERT_NONE-контекст).
     """
     try:
         return urllib.request.urlopen(req, context=net.ssl_ctx(),
@@ -97,13 +109,13 @@ def open_checked(req, timeout):
         reason = getattr(e, "reason", None)
         cert_bad = isinstance(reason, ssl.SSLCertVerificationError) or \
             "CERTIFICATE_VERIFY_FAILED" in str(reason)
-        if not cert_bad or os.environ.get("WI_INSECURE_SSL") == "0":
-            raise
-        warn(f"SSL: сертификат не прошёл проверку ({getattr(reason, 'verify_message', reason)}); "
-             "пробую без проверки. Закрепить: WI_INSECURE_SSL=1, запретить фолбек: WI_INSECURE_SSL=0")
-        debug.dbg(f"open-checked-fallback: {req.full_url}", level="WARN")
-        return urllib.request.urlopen(req, context=net.ssl_ctx(insecure=True),
-                                      timeout=timeout)
+        if cert_bad and not _insecure_fallback_allowed():
+            warn(f"SSL: сертификат не прошёл проверку ({getattr(reason, 'verify_message', reason)}). "
+                 "Фолбек без проверки сертификатов ОТКЛЮЧён по соображениям безопасности. "
+                 "Если сеть использует MITM-прокси с корнем Минцифры — установите его корневой "
+                 "сертификат в доверие системы; крайний вариант: WI_INSECURE_SSL=1 (небезопасно).")
+            debug.dbg(f"open-checked-cert-error (no fallback): {req.full_url}", level="WARN")
+        raise
 
 
 def head_check(url, timeout=15):
@@ -206,6 +218,10 @@ def try_download_manual(name, url, dest, silent=False):
     speed_checked = False
     do_speed_check = (total > SPEED_CHECK_MIN_MB * 1024 * 1024) and not state.slow_mode_active
 
+    # Сколько байт зеркало ОБЕЩАЕТ отдать в этом ответе (Content-Length при
+    # Range-докачке — это остаток, не весь файл).
+    expected_bytes = int(total_header) if total_header else 0
+
     try:
         with open(dest, mode) as f:
             while True:
@@ -249,6 +265,20 @@ def try_download_manual(name, url, dest, silent=False):
                         return False
         if not silent:
             print()
+        # Обрыв без исключения: сервер закрыл соединение раньше, чем отдал
+        # обещанные Content-Length байты. Раньше такой «успешный» конец
+        # цикла молча считался завершённой закачкой — обрезанный файл
+        # оставался на диске и в лучшем случае отсекался только проверкой
+        # сигнатуры (а корректно начатый, но урезанный с хвоста jar/zip
+        # проходил её). Возвращаем False: докачка продолжится по Range
+        # при следующем запуске.
+        if expected_bytes and downloaded < existing + expected_bytes:
+            debug.dbg(f"truncated {name}: получено {downloaded} из "
+                      f"{existing + expected_bytes} байт", level="WARN")
+            if not silent:
+                warn(f"  Ответ оборвался: {downloaded/1024/1024:.1f} МБ из "
+                     f"{(existing + expected_bytes)/1024/1024:.1f} МБ — пробую другое зеркало")
+            return False
         if not dest.exists() or dest.stat().st_size < 1024:
             return False
         size = dest.stat().st_size
