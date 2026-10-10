@@ -1,7 +1,6 @@
 """Prism, Legacy, Fabulously Optimized, OptiFine, Fabric."""
 import os
 import re
-import ssl
 import json
 import shutil
 import tarfile
@@ -19,6 +18,7 @@ from modules.config import (
     LEGACY_JAR_MIRRORS, LEGACY_JAR_MIN_SIZE,
     SYSTEM_TRUSTSTORE_PATHS, SYSTEM_TRUSTSTORE_PASSWORD,
     FABRIC_META_API, MAVEN_FABRIC, MAVEN_CENTRAL,
+    make_ssl_ctx, UA_BROWSER, UA_PROJECT,
 )
 from modules.download import download_file
 from modules.hash_utils import verify_sha512, verify_sha1, copy_to_clipboard
@@ -27,22 +27,13 @@ from modules.prefix import choose_minecraft_dir
 
 
 def _ssl_ctx():
-    """Единый SSL-контекст проекта.
-
-    Red OS ставит корневые сертификаты Минцифры, которые не совпадают с
-    цепочками GitHub/Mojang — проверка сертификата ломает скачивание в
-    школьной сети. Отключаем verification осознанно и в ОДНОМ месте
-    (раньше такой же контекст копировался 6 раз по модулям).
-    """
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    """Единый SSL-контекст проекта (реализован в config.make_ssl_ctx)."""
+    return make_ssl_ctx()
 
 
 def _http_get_json(url, timeout=30):
     """GET url -> распарсенный JSON (SSL-контекст как в остальном проекте)."""
-    req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.5"})
+    req = urllib.request.Request(url, headers={"User-Agent": UA_PROJECT})
     with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
@@ -62,7 +53,7 @@ def _github_get_json(url, timeout=30):
     except Exception:
         cache = {}
     entry = cache.get(url, {})
-    headers = {"User-Agent": "wine-installer/2.5", "Accept": "application/vnd.github+json"}
+    headers = {"User-Agent": UA_PROJECT, "Accept": "application/vnd.github+json"}
     if entry.get("etag"):
         headers["If-None-Match"] = entry["etag"]
     try:
@@ -75,8 +66,8 @@ def _github_get_json(url, timeout=30):
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(json.dumps(cache), encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "minecraft/_github_get_json")
         return data
     except urllib.error.HTTPError as e:
         if e.code == 304 and "data" in entry:      # не изменилось — отдаём кэш
@@ -182,7 +173,8 @@ def _find_system_truststore():
         try:
             if p.exists() and p.stat().st_size > 10_000:
                 return str(p)
-        except Exception:
+        except Exception as e:
+            debug.dbg_exc(e, "minecraft/_find_system_truststore")
             continue
     return None
 
@@ -272,8 +264,8 @@ def _find_legacy_installed():
                 for f in files:
                     if f.lower() == "legacylauncher.exe":
                         return Path(root) / f
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "minecraft/_find_legacy_installed")
     return None
 
 
@@ -663,8 +655,8 @@ def finish_version_install(game_dir, mc_version, version_id):
                     warn("SHA-1 client.jar не совпал — удаляю битый файл")
                     try:
                         jar_path.unlink()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        debug.dbg_exc(e, "minecraft/finish_version_install")
                 else:
                     ok("client.jar скачан и проверен")
             else:
@@ -892,8 +884,8 @@ def unpack_fo_zip_to_game(zip_path, game_dir, rel_version):
                 elif base == "manifest.json":
                     try:
                         manifest_json = json.loads(z.read(name))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        debug.dbg_exc(e, "minecraft/unpack_fo_zip_to_game")
             if not modlist_html:
                 err("В zip нет modlist.html")
                 return False
@@ -951,8 +943,8 @@ def unpack_fo_zip_to_game(zip_path, game_dir, rel_version):
             d = json.loads(dep.read_text(encoding="utf-8"))
             loader_version = (d.get("overrides", {}) or {}).get("java", {}).get("net.fabricmc.fabric-loader") \
                 or d.get("v")
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "minecraft/unpack_fo_zip_to_game")
     if not mc_version:
         warn("Не удалось определить версию Minecraft из zip — лаунчер сам подскажет.")
         hint(f"Профиль можно создать вручную: Fabric {loader_version or '?'} для нужной MC")
@@ -1060,7 +1052,7 @@ def _optifine_versions_from_html(html):
 def setup_optifine():
     info(f"{BOLD}Скачивание OptiFine{RESET}")
     try:
-        req = urllib.request.Request(OPTIFINE_PAGE, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(OPTIFINE_PAGE, headers={"User-Agent": UA_BROWSER})
         with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=30) as r:
             html = r.read().decode("utf-8", errors="replace")
     except Exception as e:
@@ -1145,8 +1137,8 @@ def setup_optifine():
     try:
         with open(dest, "rb") as f:
             head = f.read(4)
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "minecraft/setup_optifine")
     if head != b"PK\x03\x04":
         err("Скачался не JAR (похоже на страницу-заглушку optifine.net)")
         hint("Открой браузером https://optifine.net/downloads, скачай вручную,")
@@ -1301,7 +1293,8 @@ def cmd_fo_autofix():
                 continue
             try:
                 prof = json.loads(pj.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
+                debug.dbg_exc(e, "minecraft/cmd_fo_autofix")
                 continue
             inherits = prof.get("inheritsFrom")
             jar = vd / f"{vd.name}.jar"

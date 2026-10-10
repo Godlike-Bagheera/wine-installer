@@ -23,7 +23,7 @@ from pathlib import Path
 
 from modules import debug
 from modules.colors import ok, info, warn, err, hint, CYAN, YELLOW, BOLD, RESET
-from modules.config import WINE_DIR, make_github_mirrors
+from modules.config import WINE_DIR, make_github_mirrors, make_ssl_ctx, UA_PROJECT
 from modules.download import download_file
 from modules.prefix import find_minecraft_dirs
 
@@ -64,11 +64,8 @@ OFFLINE_SHADERS = [
 
 
 def _ssl_ctx():
-    import ssl
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    """Единый SSL-контекст проекта (реализован в config.make_ssl_ctx)."""
+    return make_ssl_ctx()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -291,7 +288,7 @@ def fetch_modrinth_shaders(query="shader"):
     """Список [{name, downloads, desc, files:[urls]}] или [] при ошибке сети."""
     url = MODRINTH_SEARCH.format(query=query)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": UA_PROJECT})
         with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=15) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
     except Exception as e:
@@ -307,7 +304,7 @@ def fetch_modrinth_shaders(query="shader"):
             try:
                 pv = urllib.request.Request(
                     f"https://api.modrinth.com/v2/project/{pid}/version?loaders=%5B%5D",
-                    headers={"User-Agent": "wine-installer/2.6"})
+                    headers={"User-Agent": UA_PROJECT})
                 with urllib.request.urlopen(pv, context=_ssl_ctx(), timeout=15) as r2:
                     vlist = json.loads(r2.read().decode("utf-8", errors="replace"))
                 for v in vlist[:1]:

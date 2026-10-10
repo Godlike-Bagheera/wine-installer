@@ -67,8 +67,8 @@ def _setup_readline():
                 for f in base.iterdir():
                     if f.name.lower().startswith(text.lower()):
                         candidates.append(f.name)
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "ui/_setup_readline")
         candidates = sorted(set(candidates))
         if state < len(candidates):
             return candidates[state]
@@ -78,8 +78,8 @@ def _setup_readline():
         readline.set_completer(completer)          # type: ignore[attr-defined]
         readline.parse_and_bind("tab: complete")   # type: ignore[attr-defined]
         readline.set_completer_delims(" \t\n")     # type: ignore[attr-defined]
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "ui/_setup_readline")
 
 
 def print_help():
@@ -386,8 +386,8 @@ def main():
     # Ротация старых логов
     try:
         rotate_old_logs()
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "ui/main")
 
     # Tab-автодополнение путей
     _setup_readline()
@@ -521,8 +521,8 @@ def download_aria2c():
         if archive.exists():
             try:
                 archive.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "ui/download_aria2c")
         if try_download_manual(name, url, archive, silent=False):
             if archive.exists() and archive.stat().st_size > MIN_ARIA2C_SIZE:
                 success = True
@@ -551,8 +551,8 @@ def download_aria2c():
         sh.rmtree(tmp_dir, ignore_errors=True)
         try:
             archive.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "ui/download_aria2c")
         if found:
             ok("aria2c установлен")
             return True

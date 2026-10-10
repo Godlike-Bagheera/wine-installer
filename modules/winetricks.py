@@ -1,7 +1,6 @@
 """winetricks + авто-фиксы DLL."""
 import os
 import re
-import ssl
 import subprocess
 import urllib.request
 from modules import debug
@@ -9,6 +8,7 @@ from modules.colors import ok, info, warn, err, fix, DIM, RESET
 from modules.config import (
     BIN_DIR, WINETRICKS_BIN, MIN_WINETRICKS_SIZE,
     WINETRICKS_MIRRORS, CONNECT_TIMEOUT, WINE_BIN,
+    make_ssl_ctx, UA_BROWSER,
 )
 from modules.prefix import ensure_prefix, get_wine_env
 
@@ -81,10 +81,8 @@ def download_winetricks():
     for name, url in WINETRICKS_MIRRORS:
         debug.dbg(f"winetricks: {name}")
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            ctx = make_ssl_ctx()
+            req = urllib.request.Request(url, headers={"User-Agent": UA_BROWSER})
             r = urllib.request.urlopen(req, context=ctx, timeout=CONNECT_TIMEOUT)
             data = r.read()
             r.close()

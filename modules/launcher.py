@@ -254,8 +254,8 @@ def _tts_say(text):
         return
     try:
         subprocess.Popen([spd, text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "launcher/_tts_say")
 
 
 def _build_cmd(path, use_gm):
@@ -314,8 +314,8 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
                 try:
                     sys.stdout.write(shown)
                     sys.stdout.flush()
-                except Exception:
-                    pass
+                except Exception as e:
+                    debug.dbg_exc(e, "launcher/_watch_game")
             try:
                 for pkg in detect_missing_libs(line):
                     missing_pkgs.add(pkg)
@@ -330,8 +330,8 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
     finally:
         try:
             logf.close()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "launcher/_watch_game")
     try:
         _finalize_game(path, name, log_path, start_time, rc, missing_pkgs)
     except Exception as e:
@@ -380,8 +380,8 @@ def launch(path):
         err(f"Ошибка запуска: {e}")
         try:
             logf.close()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "launcher/launch")
         update_history(path, status="crash", duration=time.time() - start_time)
         return
     if proc.stdout is None:

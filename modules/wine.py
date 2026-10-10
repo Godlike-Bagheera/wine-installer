@@ -57,8 +57,8 @@ def download_dxvk(silent=False):
                 break
         try:
             dxvk_archive.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "wine/download_dxvk")
         return True
     except Exception as e:
         debug.dbg_exc(e, "download_dxvk/extract")
@@ -82,8 +82,8 @@ def install_dxvk_to_wine(exe_path=None):
         try:
             if marker.read_text(encoding="utf-8").strip() == str(DXVK_DIR):
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "wine/install_dxvk_to_wine")
     try:
         is_64bit = syswow64.exists()
         x64 = DXVK_DIR / "x64"
@@ -101,8 +101,8 @@ def install_dxvk_to_wine(exe_path=None):
                     shutil.copy2(dll, system32 / dll.name)
         try:
             marker.write_text(str(DXVK_DIR), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "wine/install_dxvk_to_wine")
         return True
     except Exception as e:
         debug.dbg_exc(e, "install_dxvk_to_wine")
@@ -140,8 +140,8 @@ def cmd_update():
     if WINE_BIN.exists():
         try:
             WINE_BIN.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "wine/cmd_update")
     if download_wine():
         ok("Wine обновлён")
     if DXVK_DIR.exists():

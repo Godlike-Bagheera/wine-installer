@@ -1,6 +1,7 @@
 """Все константы и пути. Никакой логики — только данные."""
 import os
 import re
+import ssl
 from pathlib import Path
 
 
@@ -106,7 +107,49 @@ USE_GAMESCOPE = False
 USE_TTS_NOTIFY = False
 LOG_KEEP_DAYS = 30
 
-CURRENT_VERSION = "2.6"
+# Версия: читается из git-тега (vX.Y), если репозиторий клонирован и тег
+# доступен; иначе — захардкоженный fallback (синхронизирован с последним
+# релизным тегом). CI проверяет совпадение через tests/test_config_version.py.
+_FALLBACK_VERSION = "2.6"
+
+
+def _git_tag_version():
+    """Версия из git-тега (v2.6 -> "2.6") или None (не git / нет тегов)."""
+    import subprocess
+    repo_root = Path(__file__).resolve().parent.parent
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "describe", "--tags", "--abbrev=0"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    tag = r.stdout.strip()
+    return tag.lstrip("v") or None
+
+
+CURRENT_VERSION = _git_tag_version() or _FALLBACK_VERSION
+
+# ---------- СЕТЬ: единый TLS-контекст и User-Agent ----------
+# Red OS ставит корневые сертификаты Минцифры, которые не совпадают с
+# цепочками GitHub/Mojang — проверка сертификата ломает скачивание в
+# школьной сети. Отключаем verification ОСОЗНАННО и в ОДНОМ месте
+# (раньше такой же контекст копировался 6 раз по модулям).
+# Файлы из недоверенных зеркал дополнительно проходят size/сигнатурные
+# проверки (download_file, verify) и sha-хэши (hash_utils.verify_sha*).
+UA_BROWSER = "Mozilla/5.0"
+UA_PROJECT = f"wine-installer/{CURRENT_VERSION}"
+
+
+def make_ssl_ctx():
+    """Единый SSL-контекст проекта (см. комментарий над UA_BROWSER)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
 
 DEFAULT_SETTINGS = {"quiet_mode": False, "use_gamemode": False, "debug_mode": False}
 

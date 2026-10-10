@@ -1,6 +1,5 @@
 """Скачивание с мультизеркал, докачкой, slow-mode, aria2c, HEAD-проверкой."""
 import os
-import ssl
 import time
 import subprocess
 import urllib.request
@@ -12,6 +11,7 @@ from modules.config import (
     MIN_SPEED_KB, SPEED_TEST_SECONDS, CONNECT_TIMEOUT,
     SPEED_CHECK_MIN_MB, SLOW_MODE_AFTER,
     WINE_DIR, CACHE_FILE, ARIA2C_BIN,
+    make_ssl_ctx, UA_BROWSER,
 )
 
 
@@ -32,8 +32,8 @@ def save_mirror_cache(cache):
             json.dumps(cache, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "download/save_mirror_cache")
 
 
 def sort_mirrors_by_cache(mirrors):
@@ -83,11 +83,9 @@ def _looks_binary(path):
 
 
 def head_check(url, timeout=15):
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = make_ssl_ctx()
     try:
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA_BROWSER})
         with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
             size = int(r.headers.get("Content-Length", 0))
             return True, size
@@ -130,11 +128,9 @@ def try_download_manual(name, url, dest, silent=False):
     debug.dbg(f"manual: {name}")
     if not silent:
         info(f"Пробую зеркало: {CYAN}{name}{RESET}")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = make_ssl_ctx()
     existing = dest.stat().st_size if dest.exists() else 0
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": UA_BROWSER}
     if existing > 0:
         headers["Range"] = f"bytes={existing}-"
 
@@ -149,12 +145,12 @@ def try_download_manual(name, url, dest, silent=False):
             debug.dbg(f"416 на {name}, удаляю файл и начинаю с нуля")
             try:
                 dest.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "download/try_download_manual")
             existing = 0
             try:
                 req = urllib.request.Request(
-                    url, headers={"User-Agent": "Mozilla/5.0"}
+                    url, headers={"User-Agent": UA_BROWSER}
                 )
                 r = urllib.request.urlopen(req, context=ctx, timeout=CONNECT_TIMEOUT)
             except Exception as e2:
@@ -249,8 +245,8 @@ def try_download_manual(name, url, dest, silent=False):
     finally:
         try:
             r.close()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "download/try_download_manual")
 
 
 def download_file(mirrors, dest, label, min_size_mb=10, silent=False):
@@ -301,8 +297,8 @@ def download_file(mirrors, dest, label, min_size_mb=10, silent=False):
                 debug.dbg(f"download_file: зеркало {name} отдало HTML, удаляю {dest.name}")
                 try:
                     dest.unlink()
-                except Exception:
-                    pass
+                except Exception as e:
+                    debug.dbg_exc(e, "download/download_file")
     if not silent:
         err(f"Не удалось скачать {label}.")
     return False

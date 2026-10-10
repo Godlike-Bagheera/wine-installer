@@ -64,8 +64,8 @@ def ensure_prefix(force_boot=False, exe_path=None):
     if system32.exists():
         try:
             marker.write_text(str(time.time()), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "prefix/ensure_prefix")
         ok("Префикс готов")
         return True
 
@@ -141,8 +141,8 @@ def find_minecraft_dirs(limit=12):
             if _looks_like_mc_dir(p) and rp not in seen:
                 seen.add(rp)
                 candidates.append(p)
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "prefix/find_minecraft_dirs")
 
     seen = set()
 
@@ -167,8 +167,8 @@ def find_minecraft_dirs(limit=12):
                 add(user / ".minecraft")
                 add(user / "AppData" / "Roaming" / ".minecraft")
                 add(user / "AppData" / "Roaming" / ".tlauncher" / "legacy" / "Minecraft" / "game")
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "prefix/find_minecraft_dirs")
 
     # 3) Ограниченный обход HOME глубиной 3 на предмет папок .minecraft
     try:
@@ -184,12 +184,14 @@ def find_minecraft_dirs(limit=12):
                     try:
                         if b.is_dir() and b.name.lower() == ".minecraft":
                             add(b)
-                    except Exception:
+                    except Exception as e:
+                        debug.dbg_exc(e, "prefix/find_minecraft_dirs")
                         continue
-            except Exception:
+            except Exception as e:
+                debug.dbg_exc(e, "prefix/find_minecraft_dirs")
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "prefix/find_minecraft_dirs")
 
     def score(p):
         try:

@@ -13,8 +13,8 @@ def gamemode_available():
         r = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=5)
         if "libgamemodeauto.so.0" in r.stdout:
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "gamemode/gamemode_available")
     for path in ["/usr/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu",
                  str(HOME / ".local/share"), "/app/lib"]:
         p = Path(path)
@@ -22,8 +22,8 @@ def gamemode_available():
             try:
                 if list(p.rglob("libgamemodeauto.so*")):
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "gamemode/gamemode_available")
     return False
 
 
