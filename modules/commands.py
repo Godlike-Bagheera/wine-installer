@@ -97,8 +97,8 @@ def cmd_debugreport():
             for line in f:
                 if line.startswith(("NAME=", "VERSION=", "ID=")):
                     sysinfo.append(line.strip())
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "commands")
     sysinfo.append(f"Home: {HOME}")
     sysinfo.append(f"Wine dir: {WINE_DIR}")
     sysinfo.append(f"Wine exists: {WINE_BIN.exists()}")
@@ -110,8 +110,8 @@ def cmd_debugreport():
     try:
         df = shutil.disk_usage(HOME)
         sysinfo.append(f"Disk free: {df.free / 1024 / 1024 / 1024:.2f} GB")
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "commands")
     try:
         r = subprocess.run([str(WINE_BIN), "--version"], env=get_wine_env(),
                            capture_output=True, text=True, timeout=15)
@@ -160,8 +160,8 @@ def cmd_reset():
         subprocess.run([str(WINE_BIN), "wineserver", "-k"],
                        env=get_wine_env(), timeout=10, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "commands")
     time.sleep(1)
     try:
         shutil.rmtree(WINE_PREFIX)
@@ -285,8 +285,8 @@ def cmd_steamfix(name):
                 if list(candidate.glob("steam_api*.dll")):
                     found_any = True
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "commands")
     if not found_any:
         warn("steam_api.dll нет в префиксе — команда бесполезна")
         hint("Скачай Goldberg: https://github.com/Detanup01/gbe_fork/releases")

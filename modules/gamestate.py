@@ -86,8 +86,8 @@ def stop_one(name, kill_after=5):
                 proc.kill()
                 try:
                     proc.wait(timeout=3)
-                except Exception:
-                    pass
+                except Exception as e:
+                    debug.dbg_exc(e, "gamestate")
             stopped = True
     except Exception as e:
         debug.dbg(f"stop_one({name}): {e}")

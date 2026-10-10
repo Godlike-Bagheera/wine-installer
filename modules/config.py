@@ -3,6 +3,7 @@ import os
 import re
 import json
 from pathlib import Path
+from modules import debug
 
 
 # Прокси-зеркала GitHub (порядок = приоритет).
@@ -86,8 +87,8 @@ def _resolve_home():
         pw_dir = Path(pwd.getpwuid(os.getuid()).pw_dir)
         if pw_dir.is_dir():
             return pw_dir
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "config")
     return env_home
 
 

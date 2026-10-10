@@ -155,8 +155,8 @@ def install_via_winetricks(pkgs, already_installed, exe_path=None):
         except Exception:
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "winetricks")
         raise
     if proc.returncode == 0:
         ok(f"Установлено: {', '.join(to_install)}")

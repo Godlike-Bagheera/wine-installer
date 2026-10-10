@@ -65,8 +65,8 @@ def ensure_prefix(force_boot=False, exe_path=None):
     if system32.exists():
         try:
             marker.write_text(str(time.time()), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "prefix")
         ok("Префикс готов")
         return True
 
@@ -142,9 +142,8 @@ def find_minecraft_dirs(limit=12):
             if _looks_like_mc_dir(p) and rp not in seen:
                 seen.add(rp)
                 candidates.append(p)
-        except Exception:
-            pass
-
+        except Exception as e:
+            debug.dbg_exc(e, "prefix")
     seen = set()
 
     # 1) Прямые типовые пути
@@ -168,9 +167,8 @@ def find_minecraft_dirs(limit=12):
                 add(user / ".minecraft")
                 add(user / "AppData" / "Roaming" / ".minecraft")
                 add(user / "AppData" / "Roaming" / ".tlauncher" / "legacy" / "Minecraft" / "game")
-    except Exception:
-        pass
-
+    except Exception as e:
+        debug.dbg_exc(e, "prefix")
     # 3) Ограниченный обход HOME глубиной 3 на предмет папок .minecraft
     try:
         skip = {"wine-portable", ".cache", ".local", ".config", ".git",
@@ -189,9 +187,8 @@ def find_minecraft_dirs(limit=12):
                         continue
             except Exception:
                 continue
-    except Exception:
-        pass
-
+    except Exception as e:
+        debug.dbg_exc(e, "prefix")
     def score(p):
         try:
             vdir = p / "versions"

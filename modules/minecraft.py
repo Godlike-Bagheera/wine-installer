@@ -64,8 +64,8 @@ def _github_get_json(url, timeout=30):
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(json.dumps(cache), encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "minecraft")
         return data
     except urllib.error.HTTPError as e:
         if e.code == 304 and "data" in entry:      # не изменилось — отдаём кэш
@@ -260,8 +260,8 @@ def _find_legacy_installed():
                 for f in files:
                     if f.lower() == "legacylauncher.exe":
                         return Path(root) / f
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "minecraft")
     return None
 
 
@@ -651,8 +651,8 @@ def finish_version_install(game_dir, mc_version, version_id):
                     warn("SHA-1 client.jar не совпал — удаляю битый файл")
                     try:
                         jar_path.unlink()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        debug.dbg_exc(e, "minecraft")
                 else:
                     ok("client.jar скачан и проверен")
             else:
@@ -880,8 +880,8 @@ def unpack_fo_zip_to_game(zip_path, game_dir, rel_version):
                 elif base == "manifest.json":
                     try:
                         manifest_json = json.loads(z.read(name))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        debug.dbg_exc(e, "minecraft")
             if not modlist_html:
                 err("В zip нет modlist.html")
                 return False
@@ -939,8 +939,8 @@ def unpack_fo_zip_to_game(zip_path, game_dir, rel_version):
             d = json.loads(dep.read_text(encoding="utf-8"))
             loader_version = (d.get("overrides", {}) or {}).get("java", {}).get("net.fabricmc.fabric-loader") \
                 or d.get("v")
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "minecraft")
     if not mc_version:
         warn("Не удалось определить версию Minecraft из zip — лаунчер сам подскажет.")
         hint(f"Профиль можно создать вручную: Fabric {loader_version or '?'} для нужной MC")
@@ -1133,8 +1133,8 @@ def setup_optifine():
     try:
         with open(dest, "rb") as f:
             head = f.read(4)
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "minecraft")
     if head != b"PK\x03\x04":
         err("Скачался не JAR (похоже на страницу-заглушку optifine.net)")
         hint("Открой браузером https://optifine.net/downloads, скачай вручную,")

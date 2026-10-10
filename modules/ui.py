@@ -67,8 +67,8 @@ def _setup_readline():
                 for f in base.iterdir():
                     if f.name.lower().startswith(text.lower()):
                         candidates.append(f.name)
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "ui")
         candidates = sorted(set(candidates))
         if state < len(candidates):
             return candidates[state]
@@ -78,10 +78,8 @@ def _setup_readline():
         readline.set_completer(completer)          # type: ignore[attr-defined]
         readline.parse_and_bind("tab: complete")   # type: ignore[attr-defined]
         readline.set_completer_delims(" \t\n")     # type: ignore[attr-defined]
-    except Exception:
-        pass
-
-
+    except Exception as e:
+        debug.dbg_exc(e, "ui")
 def print_help():
     # Динамическая рамка: ширина считается от содержимого, не «едет» при v2.10+
     title = f"  Команды v{CURRENT_VERSION}"
@@ -232,17 +230,43 @@ def _cmd_quiet():
     ok(f"Тихий режим {'вкл' if state.QUIET_MODE else 'выкл'}")
 
 
+def _cmd_stopgame(a=""):
+    cmd_stopgame(a)
+
+
+def _cmd_waitgame(a=""):
+    cmd_waitgame(a)
+
+
+def _cmd_shaders(a=""):
+    cmd_shaders(a)
+
+
+def _cmd_desktop(a=""):
+    cmd_desktop(a)
+
+
+def _cmd_steamfix(a=""):
+    cmd_steamfix(a)
+
+
+def _cmd_download(a=""):
+    cmd_download(a)
+
+
 # Команды с аргументом: ключ в начале строки, хвост — аргумент handler'у.
+# Обёртки (_cmd_*) нужны, чтобы monkeypatch в тестах (ui.cmd_stopgame = ...)
+# продолжал работать: ссылка берётся в момент вызова, а не в момент импорта.
 ARGS_COMMANDS = {
     "settings": cmd_settings, "настройки": cmd_settings,
     "debug": cmd_debug,
-    "stopgame": cmd_stopgame, "остановитьигру": cmd_stopgame, "стопигра": cmd_stopgame,
-    "waitgame": cmd_waitgame, "ждатьигру": cmd_waitgame,
-    "shaders": cmd_shaders, "шейдеры": cmd_shaders, "шейдер": cmd_shaders,
+    "stopgame": _cmd_stopgame, "остановитьигру": _cmd_stopgame, "стопигра": _cmd_stopgame,
+    "waitgame": _cmd_waitgame, "ждатьигру": _cmd_waitgame,
+    "shaders": _cmd_shaders, "шейдеры": _cmd_shaders, "шейдер": _cmd_shaders,
     "export": cmd_export, "экспорт": cmd_export,
-    "desktop": cmd_desktop, "ярлык": cmd_desktop,
-    "steamfix": cmd_steamfix,
-    "download": cmd_download, "скачать": cmd_download,
+    "desktop": _cmd_desktop, "ярлык": _cmd_desktop,
+    "steamfix": _cmd_steamfix,
+    "download": _cmd_download, "скачать": _cmd_download,
 }
 
 # Выход из REPL
@@ -405,6 +429,11 @@ def main():
         print()
     if not check_disk_space():
         sys.exit(1)
+    # Зависимости хоста (fuse/X11/Vulkan) — объясняем отказ Wine заранее
+    try:
+        check_host_deps()
+    except Exception as e:
+        debug.dbg_exc(e, "main/check_host_deps")
     ensure_bin_tools()
     create_runexe()
     if not (WINE_BIN.exists() and os.access(WINE_BIN, os.X_OK)):
@@ -474,6 +503,54 @@ def main():
     debug.dbg("Завершение")
 
 
+def check_host_deps():
+    """Проверка зависимостей хоста перед попыткой скачать/запустить Wine.
+
+    Даёт понятное объяснение, почему Wine может не заработать, ДО того как
+    пользователь увидит невнятный «Wine не отвечает». Ничего критичного не
+    блокирует (продолжаем запуск), кроме явного отсутствия fuse — без него
+    AppImage в принципе не смонтируется.
+    """
+    import shutil
+    problems = []
+    # FUSE для монтирования AppImage (Wine/DXVK скачиваются как .AppImage)
+    has_fuse = (shutil.which("fuse") is not None
+                or Path("/dev/fuse").exists()
+                or shutil.which("squashfuse") is not None
+                or shutil.which("appimagetool") is not None)
+    if not has_fuse:
+        problems.append(("FUSE", "нет /dev/fuse и утилит fuse/squashfuse — "
+                         "AppImage не смонтируется",
+                         "sudo apt install fuse libfuse2"))
+    # Дисплейный сервер (Wine GUI требует X11 или Wayland)
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        problems.append(("X11/Wayland", "переменные DISPLAY/WAYLAND_DISPLAY пусты — "
+                         "графические игры не откроют окно",
+                         "запусти из графической сессии"))
+    # Vulkan-драйвер (нужен DXVK)
+    try:
+        r = subprocess.run(["vulkaninfo", "--summary"], capture_output=True,
+                           text=True, timeout=8)
+        vk_ok = r.returncode == 0 and "deviceName" in (r.stdout + r.stderr)
+    except Exception as e:
+        debug.dbg_exc(e, "check_host_deps/vulkaninfo")
+        vk_ok = False
+    if not vk_ok:
+        problems.append(("Vulkan", "vulkaninfo не найден или нет устройств — "
+                         "DXVK не заработает",
+                         "пакеты mesa-vulkan-drivers / nvidia-vulkan / vulkan-tools"))
+    if problems:
+        sep()
+        warn("Зависимости хоста:")
+        for name, why, fix in problems:
+            print(f"  {YELLOW}{name:12}{RESET} {why}")
+            hint(f"Решение: {fix}")
+        print()
+    else:
+        debug.dbg("check_host_deps: все зависимости на месте")
+    return has_fuse
+
+
 def check_disk_space():
     import shutil
     try:
@@ -525,8 +602,8 @@ def download_aria2c():
         if archive.exists():
             try:
                 archive.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "ui")
         if try_download_manual(name, url, archive, silent=False):
             if archive.exists() and archive.stat().st_size > MIN_ARIA2C_SIZE:
                 success = True
@@ -555,8 +632,8 @@ def download_aria2c():
         sh.rmtree(tmp_dir, ignore_errors=True)
         try:
             archive.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "ui")
         if found:
             ok("aria2c установлен")
             return True

@@ -73,10 +73,8 @@ def save_history(data):
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    except Exception:
-        pass
-
-
+    except Exception as e:
+        debug.dbg_exc(e, "settings")
 def update_history(exe_path, status=None, duration=None):
     data = load_history()
     path_str = str(exe_path)

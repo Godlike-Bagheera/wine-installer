@@ -32,10 +32,8 @@ def _print_art():
         art = art_path.read_text(encoding="utf-8").rstrip("\n")
         if art:
             print(f"\033[96m{art}\033[0m")
-    except Exception:
-        pass
-
-
+    except Exception as e:
+        debug.dbg_exc(e, "wine")
 if "--version" in sys.argv:
     print(f"Wine Installer + Game Launcher v{VERSION}")
     sys.exit(0)

@@ -253,10 +253,8 @@ def _tts_say(text):
         return
     try:
         subprocess.Popen([spd, text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-
+    except Exception as e:
+        debug.dbg_exc(e, "launcher")
 def _build_cmd(path, use_gm):
     suffix = path.suffix.lower()
     if suffix == ".lnk":
@@ -314,8 +312,8 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
                 try:
                     sys.stdout.write(shown)
                     sys.stdout.flush()
-                except Exception:
-                    pass
+                except Exception as e:
+                    debug.dbg_exc(e, "launcher")
             try:
                 for pkg in detect_missing_libs(line):
                     missing_pkgs.add(pkg)
@@ -331,8 +329,8 @@ def _watch_game(proc, logf, path, name, log_path, start_time):
     finally:
         try:
             logf.close()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "launcher")
     if crashed and rc == 0:
         # Код 0 мог быть недостоверным (процесс ещё жив, вывод потерян) —
         # не засчитываем «успех», чтобы история не врала о статусе игры.
@@ -385,8 +383,8 @@ def launch(path):
         err(f"Ошибка запуска: {e}")
         try:
             logf.close()
-        except Exception:
-            pass
+        except Exception as e:
+            debug.dbg_exc(e, "launcher")
         update_history(path, status="crash", duration=time.time() - start_time)
         return
     if proc.stdout is None:

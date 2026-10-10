@@ -31,10 +31,8 @@ def save_mirror_cache(cache):
             json.dumps(cache, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-    except Exception:
-        pass
-
-
+    except Exception as e:
+        debug.dbg_exc(e, "download")
 def sort_mirrors_by_cache(mirrors):
     cache = load_mirror_cache()
     return sorted(mirrors, key=lambda item: -cache.get(item[0], {}).get("speed", 0))
@@ -144,8 +142,8 @@ def try_download_manual(name, url, dest, silent=False):
             debug.dbg(f"416 на {name}, удаляю файл и начинаю с нуля")
             try:
                 dest.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                debug.dbg_exc(e, "download")
             existing = 0
             try:
                 req = urllib.request.Request(
@@ -244,10 +242,8 @@ def try_download_manual(name, url, dest, silent=False):
     finally:
         try:
             r.close()
-        except Exception:
-            pass
-
-
+        except Exception as e:
+            debug.dbg_exc(e, "download")
 def download_file(mirrors, dest, label, min_size_mb=10, silent=False):
     WINE_DIR.mkdir(parents=True, exist_ok=True)
     # min_size_mb=0 раньше пропускал любую закачку, включая пустые/обрубки:
@@ -296,8 +292,8 @@ def download_file(mirrors, dest, label, min_size_mb=10, silent=False):
                 debug.dbg(f"download_file: зеркало {name} отдало HTML, удаляю {dest.name}")
                 try:
                     dest.unlink()
-                except Exception:
-                    pass
+                except Exception as e:
+                    debug.dbg_exc(e, "download")
     if not silent:
         err(f"Не удалось скачать {label}.")
     return False
