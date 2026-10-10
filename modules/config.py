@@ -3,7 +3,10 @@ import os
 import re
 import json
 from pathlib import Path
-from modules import debug
+
+# ВАЖНО: modules.debug импортирует из этого модуля DEBUG_LOG/LOG_DIR,
+# поэтому верхнеуровневый `from modules import debug` здесь вызвал бы
+# циклический импорт. Локальный импорт внутри try — намеренный.
 
 
 # Прокси-зеркала GitHub (порядок = приоритет).
@@ -88,6 +91,8 @@ def _resolve_home():
         if pw_dir.is_dir():
             return pw_dir
     except Exception as e:
+        # локальный импорт — иначе циклический импорт config <-> debug
+        from modules import debug
         debug.dbg_exc(e, "config")
     return env_home
 
