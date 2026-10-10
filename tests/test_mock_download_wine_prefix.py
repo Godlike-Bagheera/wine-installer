@@ -415,7 +415,6 @@ def _manual_body(paths):
     # 6.4 416 при существующем файле -> удалить и качать с нуля
     dest4 = paths["base"] / "four.zip"
     dest4.write_bytes(b"stale-cache-bytes")
-    req_statuses = []
 
     def opener_416(req, timeout):
         if "Range" in dict(req.headers):
