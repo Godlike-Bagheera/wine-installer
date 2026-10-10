@@ -83,9 +83,13 @@ def _setup_readline():
 
 
 def print_help():
-    print(f"{BOLD}╔══════════════════════════════════════════════════╗")
-    print(f"║  Команды v{CURRENT_VERSION}                                  ║")
-    print(f"╚══════════════════════════════════════════════════╝{RESET}")
+    # Динамическая рамка: ширина считается от содержимого, не «едет» при v2.10+
+    title = f"  Команды v{CURRENT_VERSION}"
+    width = max(len(title), len("  Wine Installer + Game Launcher")) + 2
+    border = "═" * width
+    print(f"{BOLD}╔{border}╗")
+    print(f"║{title.ljust(width)}║")
+    print(f"╚{border}╝{RESET}")
     print(f"{BOLD}── Игры ──────────────────────────────────────────{RESET}")
     print(f"  {CYAN}<имя.exe>{RESET}         — запустить игру")
     print(f"  {CYAN}<номер>{RESET}             — из истории")
@@ -141,13 +145,15 @@ def print_help():
 
 
 def check_all_commands():
+    """EXPECTED_COMMANDS против реестра COMMAND_REGISTRY/ARGS_COMMANDS.
+
+    Сверка по данным, а не по исходнику process_input (антипаттерн с
+    inspect.getsource убран): каждая ожидаемая команда должна быть ключом
+    одного из двух реестров.
+    """
     try:
-        import inspect
-        src = inspect.getsource(process_input)
-        missing = []
-        for cmd in EXPECTED_COMMANDS:
-            if cmd not in src:
-                missing.append(cmd)
+        missing = [c for c in EXPECTED_COMMANDS
+                   if c not in COMMAND_REGISTRY and c not in ARGS_COMMANDS]
         if missing:
             warn(f"Потеряны команды: {missing}")
         else:
@@ -156,149 +162,137 @@ def check_all_commands():
         debug.dbg_exc(e, "check_all_commands")
 
 
+# ─────────────────────────────────────────────────────────────────────
+#  РЕЕСТР КОМАНД (dict вместо цепочки if/elif):
+#  нормализованное имя/синоним -> handler.
+#  Точные команды — в COMMAND_REGISTRY; команды с аргументом — в ARGS_COMMANDS
+#  (ключ в начале строки, хвост передаётся аргументом).
+#  check_all_commands и тесты сверяют с этим реестром EXPECTED_COMMANDS —
+#  без inspect.getsource(process_input).
+#  ВАЖНО: handlers берутся по имени модуля (ui.cmd_stopgame(...)), а не по
+#  прямой ссылке — тогда monkeypatch в тестах продолжает работать.
+# ─────────────────────────────────────────────────────────────────────
+COMMAND_REGISTRY = {
+    # ── точные команды (без аргумента) ──
+    "help": print_help, "?": print_help,
+    "помощь": print_help, "справка": print_help,
+    "debugreport": cmd_debugreport, "отладка": cmd_debugreport,
+    "games": lambda a="": cmd_games_list(), "игры": lambda a="": cmd_games_list(),
+    "minecraft": lambda a="": cmd_minecraft(), "майнкрафт": lambda a="": cmd_minecraft(),
+    "fo": lambda a="": setup_fabulously_optimized(),
+    "майнкрафт fo": lambda a="": setup_fabulously_optimized(),
+    "minecraft fo": lambda a="": setup_fabulously_optimized(),
+    "fo-autofix": lambda a="": cmd_fo_autofix(), "foautofix": lambda a="": cmd_fo_autofix(),
+    "фо-автофикс": lambda a="": cmd_fo_autofix(), "автофикс": lambda a="": cmd_fo_autofix(),
+    "optifine": lambda a="": setup_optifine(), "оф": lambda a="": setup_optifine(),
+    "майнкрафт optifine": lambda a="": setup_optifine(),
+    "minecraft optifine": lambda a="": setup_optifine(),
+    "prism": lambda a="": setup_prism(), "майнкрафт prism": lambda a="": setup_prism(),
+    "minecraft prism": lambda a="": setup_prism(),
+    "legacy": lambda a="": setup_legacy(), "майнкрафт legacy": lambda a="": setup_legacy(),
+    "minecraft legacy": lambda a="": setup_legacy(),
+    "saveworlds": lambda a="": cmd_save_worlds(), "сохранитьмиры": lambda a="": cmd_save_worlds(),
+    "миры на диск": lambda a="": cmd_save_worlds(), "worlds-save": lambda a="": cmd_save_worlds(),
+    "loadworlds": lambda a="": cmd_load_worlds(), "загрузитьмиры": lambda a="": cmd_load_worlds(),
+    "миры с диска": lambda a="": cmd_load_worlds(), "worlds-load": lambda a="": cmd_load_worlds(),
+    "worlds": lambda a="": cmd_worlds_menu(), "миры": lambda a="": cmd_worlds_menu(),
+    "дискd": lambda a="": cmd_worlds_menu(), "диск d": lambda a="": cmd_worlds_menu(),
+    "fonts": lambda a="": cmd_fonts(), "шрифты": lambda a="": cmd_fonts(),
+    "gamemode": lambda a="": cmd_gamemode(),
+    "vulkan": lambda a="": cmd_vulkan(), "вулкан": lambda a="": cmd_vulkan(),
+    "verify": lambda a="": cmd_verify(), "проверка": lambda a="": cmd_verify(),
+    "update": lambda a="": cmd_update(), "обновить": lambda a="": cmd_update(),
+    "history": lambda a="": show_history_menu(), "история": lambda a="": show_history_menu(),
+    "reset": lambda a="": cmd_reset(), "сброс": lambda a="": cmd_reset(),
+    "log": lambda a="": cmd_log(), "лог": lambda a="": cmd_log(),
+    "bin": lambda a="": cmd_bin(), "утилиты": lambda a="": cmd_bin(),
+    "install-java": lambda a="": cmd_install_java(), "java": lambda a="": cmd_install_java(),
+    "gpu-temp": lambda a="": cmd_gpu_temp(), "gtemp": lambda a="": cmd_gpu_temp(),
+    "темп": lambda a="": cmd_gpu_temp(),
+    "freegames": lambda a="": cmd_free_games(), "free": lambda a="": cmd_free_games(),
+    "free-games": lambda a="": cmd_free_games(), "фри": lambda a="": cmd_free_games(),
+    "gamestatus": lambda a="": cmd_game_status(),
+    "состояниеигр": lambda a="": cmd_game_status(),
+    "статусигр": lambda a="": cmd_game_status(),
+    "dxvk": lambda a="": _cmd_dxvk(),
+    "quiet": lambda a="": _cmd_quiet(), "тихо": lambda a="": _cmd_quiet(),
+}
+
+
+def _cmd_dxvk():
+    from modules.wine import cmd_dxvk
+    cmd_dxvk()
+
+
+def _cmd_quiet():
+    state.QUIET_MODE = not state.QUIET_MODE
+    s = load_settings()
+    s["quiet_mode"] = state.QUIET_MODE
+    save_settings(s)
+    ok(f"Тихий режим {'вкл' if state.QUIET_MODE else 'выкл'}")
+
+
+# Команды с аргументом: ключ в начале строки, хвост — аргумент handler'у.
+ARGS_COMMANDS = {
+    "settings": cmd_settings, "настройки": cmd_settings,
+    "debug": cmd_debug,
+    "stopgame": cmd_stopgame, "остановитьигру": cmd_stopgame, "стопигра": cmd_stopgame,
+    "waitgame": cmd_waitgame, "ждатьигру": cmd_waitgame,
+    "shaders": cmd_shaders, "шейдеры": cmd_shaders, "шейдер": cmd_shaders,
+    "export": cmd_export, "экспорт": cmd_export,
+    "desktop": cmd_desktop, "ярлык": cmd_desktop,
+    "steamfix": cmd_steamfix,
+    "download": cmd_download, "скачать": cmd_download,
+}
+
+# Выход из REPL
+EXIT_COMMANDS = ("exit", "quit", "q", "выход")
+
+
+def resolve_command(low):
+    """(handler, arg) по нормализованной строке ввода или (None, None)."""
+    if low in COMMAND_REGISTRY:
+        return COMMAND_REGISTRY[low], ""
+    for key in ARGS_COMMANDS:
+        if low == key or low.startswith(key + " "):
+            return ARGS_COMMANDS[key], low[len(key):].strip()
+    # префиксные exact-команды (как в прежнем startswith-разборе)
+    for key in ("gamestatus", "состояниеигр", "статусигр"):
+        if low.startswith(key):
+            return COMMAND_REGISTRY[key], ""
+    # русские синонимы могут быть написаны слитно с аргументом: "стопигра mine"
+    nospace = low.replace(" ", "")
+    for key in ("остановитьигру", "стопигра", "ждатьигру"):
+        if nospace.startswith(key) and len(nospace) > len(key):
+            idx = low.find(key)
+            tail = low[idx + len(key):]
+            if tail.startswith(" "):
+                tail = tail[1:]
+            else:
+                tail = tail.strip()
+            return ARGS_COMMANDS[key], tail
+    return None, None
+
+
 def process_input(name, last_exe):
     low = name.lower().strip()
     if not low:
         return last_exe, True
-    if low in ("exit", "quit", "q", "выход"):
+    if low in EXIT_COMMANDS:
         return last_exe, False
-    if low in ("help", "?", "помощь", "справка"):
-        print_help()
-        return last_exe, True
-    if low.startswith("settings") or low.startswith("настройки"):
-        args = name.split(maxsplit=1)[1] if " " in name else ""
-        cmd_settings(args)
-        return last_exe, True
-    if low.startswith("debug") and low != "debugreport":
-        args = name.split(maxsplit=1)[1] if " " in name else ""
-        cmd_debug(args)
-        return last_exe, True
-    if low in ("debugreport", "отладка"):
-        cmd_debugreport()
-        return last_exe, True
-    if low in ("export", "экспорт"):
-        cmd_export(name.split(maxsplit=1)[1] if " " in name else "")
-        return last_exe, True
-    if low in ("gpu-temp", "gtemp", "темп"):
-        cmd_gpu_temp()
-        return last_exe, True
-    if low in ("freegames", "free", "free-games", "фри"):
-        cmd_free_games()
-        return last_exe, True
-    if low in ("install-java", "java"):
-        cmd_install_java()
-        return last_exe, True
-    if low in ("bin", "утилиты"):
-        cmd_bin()
-        return last_exe, True
-    if low in ("verify", "проверка"):
-        cmd_verify()
-        return last_exe, True
-    if low in ("update", "обновить"):
-        cmd_update()
-        return last_exe, True
-    if low in ("history", "история"):
-        show_history_menu()
-        return last_exe, True
-    if low in ("quiet", "тихо"):
-        state.QUIET_MODE = not state.QUIET_MODE
-        s = load_settings()
-        s["quiet_mode"] = state.QUIET_MODE
-        save_settings(s)
-        ok(f"Тихий режим {'вкл' if state.QUIET_MODE else 'выкл'}")
-        return last_exe, True
-    if low in ("reset", "сброс"):
-        cmd_reset()
-        return last_exe, True
-    if low == "dxvk":
-        from modules.wine import cmd_dxvk
-        cmd_dxvk()
-        return last_exe, True
-    if low in ("vulkan", "вулкан"):
-        cmd_vulkan()
-        return last_exe, True
-    if low in ("fonts", "шрифты"):
-        cmd_fonts()
-        return last_exe, True
-    if low == "gamemode":
-        cmd_gamemode()
-        return last_exe, True
-    if low in ("log", "лог"):
-        cmd_log()
-        return last_exe, True
-    if low in (
-        "gamestatus", "состояниеигр", "статусигр",
-        "stopgame", "остановитьигру", "стопигра",
-        "waitgame", "ждатьигру",
-        "games", "игры",
-        "shaders", "шейдеры", "шейдер",
-    ) or (
-        (low.startswith("gamestatus") or low.startswith("stopgame") or
-         low.startswith("waitgame") or low.startswith("shaders") or
-         low.replace(" ", "").startswith("остановитьигру") or
-         low.replace(" ", "").startswith("стопигра") or
-         low.replace(" ", "").startswith("ждатьигру")) and not name.startswith("/")
-    ):
-        args = name.split(maxsplit=1)[1] if " " in name else ""
-        nospace = low.replace(" ", "")
-        if low.startswith("gamestatus") or nospace.startswith("состояниеигр") \
-                or nospace.startswith("статусигр"):
-            cmd_game_status()
-        elif low.startswith("stopgame") or nospace.startswith("остановитьигру") \
-                or nospace.startswith("стопигра"):
-            cmd_stopgame(args)
-        elif low.startswith("waitgame") or nospace.startswith("ждатьигру"):
-            cmd_waitgame(args)
-        elif low in ("games", "игры"):
-            cmd_games_list()
+    handler, args = resolve_command(low)
+    if handler is not None:
+        # desktop/steamfix раньше требовали, что строка НЕ начинается с "/":
+        # «/home/user/desktop game.exe» — это путь к игре, а не команда.
+        first = low.split(maxsplit=1)[0] if low else ""
+        if first in ("desktop", "ярлык", "steamfix") and name.startswith("/"):
+            pass  # падаем в поиск игры ниже
+        elif low in ("desktop", "ярлык") and not args:
+            warn("desktop <имя.exe>")
+            return last_exe, True
         else:
-            cmd_shaders(args)
-        return last_exe, True
-    if low in ("minecraft", "майнкрафт"):
-        cmd_minecraft()
-        return last_exe, True
-    if low in ("minecraft fo", "майнкрафт fo", "fo"):
-        setup_fabulously_optimized()
-        return last_exe, True
-    if low in ("fo-autofix", "foautofix", "фо-автофикс", "автофикс"):
-        cmd_fo_autofix()
-        return last_exe, True
-    if low in ("minecraft optifine", "майнкрафт optifine", "optifine", "оф"):
-        setup_optifine()
-        return last_exe, True
-    if low in ("minecraft prism", "майнкрафт prism", "prism"):
-        setup_prism()
-        return last_exe, True
-    if low in ("minecraft legacy", "майнкрафт legacy", "legacy"):
-        setup_legacy()
-        return last_exe, True
-    if low in ("saveworlds", "сохранитьмиры", "миры на диск", "worlds-save"):
-        cmd_save_worlds()
-        return last_exe, True
-    if low in ("loadworlds", "загрузитьмиры", "миры с диска", "worlds-load"):
-        cmd_load_worlds()
-        return last_exe, True
-    if low in ("worlds", "миры", "дискd", "диск d"):
-        cmd_worlds_menu()
-        return last_exe, True
-    if low in ("desktop", "ярлык"):
-        warn("desktop <имя.exe>")
-        return last_exe, True
-    if (low.startswith("desktop ") or low.startswith("ярлык ")) and not name.startswith("/"):
-        parts = name.split(maxsplit=1)
-        if len(parts) == 2:
-            cmd_desktop(parts[1])
-        return last_exe, True
-    if low.startswith("steamfix ") and not name.startswith("/"):
-        parts = name.split(maxsplit=1)
-        if len(parts) == 2:
-            cmd_steamfix(parts[1])
-        return last_exe, True
-    if low.startswith("download ") or low.startswith("скачать "):
-        parts = name.split(maxsplit=1)
-        if len(parts) == 2:
-            cmd_download(parts[1].strip())
-        return last_exe, True
+            handler(args)
+            return last_exe, True
     if low == "!!":
         if not last_exe:
             warn("Нет истории")
@@ -382,23 +376,29 @@ def print_diagnostics():
 def main():
     # ASCII-арт из ascii-art.txt
     print_art(CYAN)
-    print(f"{BLUE}╔══════════════════════════════════════════════════╗")
-    print(f"║  Wine Installer + Game Launcher  v{CURRENT_VERSION}            ║")
-    print("║  Wine + DXVK + Minecraft + Debug + JDK           ║")
-    print(f"╚══════════════════════════════════════════════════╝{RESET}\n")
+    title1 = f"  Wine Installer + Game Launcher  v{CURRENT_VERSION}"
+    title2 = "  Wine + DXVK + Minecraft + Debug + JDK"
+    width = max(len(title1), len(title2)) + 2
+    border = "═" * width
+    print(f"{BLUE}╔{border}╗")
+    print(f"║{title1.ljust(width)}║")
+    print(f"║{title2.ljust(width)}║")
+    print(f"╚{border}╝{RESET}\n")
 
-    # Ротация старых логов
+    # Настройки → state.* ДО ротации: LOG_KEEP_DAYS и QUIET_MODE уже действуют
+    apply_settings()
+
+    # Ротация старых логов (живой debug.log защищён внутри rotate_old_logs)
     try:
         rotate_old_logs()
-    except Exception:
-        pass
+    except Exception as e:
+        debug.dbg_exc(e, "rotate_old_logs")
 
     # Tab-автодополнение путей
     _setup_readline()
 
     debug.dbg("=" * 60)
     debug.dbg(f"ЗАПУСК v{CURRENT_VERSION}, DEBUG={state.DEBUG_MODE}, argv={sys.argv}")
-    apply_settings()
     check_all_commands()
     if state.DEBUG_MODE:
         info(f"Дебаг включён → {DEBUG_LOG}")

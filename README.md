@@ -37,7 +37,7 @@ bash install.sh
 - 📦 Экспорт истории/настроек (`export`)
 - 🌡  Температура GPU (`gpu-temp`) — nvidia-smi или sensors
 - 🆓 Каталог бесплатных игр (`freegames`)
-- 🔔 Проверка обновлений (GitFlic / GitHub — переключатель в `config.py`)
+- 🩺 Автопочинка сборки Fabulously Optimized (`fo-autofix`)
 
 ## Команды
 
@@ -94,13 +94,12 @@ bash install.sh
 
 ### Полный конфиг
 
-Логика выбора зеркал, версий DXVK/Winetricks/JDK, включение GameMode /
-MangoHud / gamescope и другие тонкие настройки лежат в `modules/config.py`
+Логика выбора зеркал, версий DXVK/Winetricks/JDK лежат в `modules/config.py`
 (только константы, без логики). Меню `settings` внутри программы позволяет
-менять пользовательские опции без правки кода.
-
-> ⚠️ Не публикуй в репозитории личные токены/ключи из `config.py` — для этого
-> создай локальный `.env` (он уже в `.gitignore`).
+менять пользовательские опции без правки кода: они сохраняются в
+`~/wine-portable/settings.json` (`quiet`, `gamemode`, `dxvkhud`, `mangohud`,
+`gamescope`, `tts`, `pergameprefix`, `logdays`, а также свои зеркала GitHub
+через ключ `gh_proxies`).
 
 ## Лицензия
 
