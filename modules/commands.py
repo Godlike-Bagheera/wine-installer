@@ -14,21 +14,20 @@ from pathlib import Path
 from modules import debug, state
 from modules.colors import (
     ok, info, warn, err, hint,
-    CYAN, BOLD, DIM, MAGENTA, YELLOW, RESET,
+    CYAN, BOLD, MAGENTA, RESET,
 )
 from modules.config import (
     HOME, WINE_DIR, WINE_BIN, WINE_PREFIX, LOG_DIR, DEBUG_LOG,
-    BIN_DIR, WINETRICKS_BIN, ARIA2C_BIN, DXVK_DIR, SETTINGS_FILE,
-    HISTORY_FILE, GAMES_DIR, DESKTOP_DIRS, SHORTCUTS_DIR,
-    DXVK_OVERRIDES, CURRENT_VERSION,
+    WINETRICKS_BIN, ARIA2C_BIN, DXVK_DIR, SETTINGS_FILE,
+    HISTORY_FILE, GAMES_DIR,
+    CURRENT_VERSION,
 )
 from modules.prefix import get_wine_env
 from modules.wine import install_dxvk_to_wine
-from modules.gamemode import gamemode_available
 from modules.java import find_java
 from modules.launcher import find_exe
 from modules.settings import (
-    load_settings, save_settings, apply_settings,
+    load_settings, save_settings,
 )
 from modules import net
 from modules.download import download_file
@@ -428,10 +427,11 @@ def cmd_download(args):
 
 # ═══════════════════════════════════════════════════════════════════
 #  РЕЭКСПОРТ ВСПОМОГАТЕЛЬНЫХ КОМАНД (modules/commands_extra.py)
-#  Импорт — в конце модуля: commands_extra тянет отсюда cmd_debug,
+#  Импорт — в конце модуля: commands_extra тянет отсюда cmd_download,
 #  ранний импорт создал бы циклическую инициализацию.
+#  noqa: F401 — имена используются из этого модуля (ui.py, тесты).
 # ═══════════════════════════════════════════════════════════════════
-from modules.commands_extra import (  # noqa: E402
+from modules.commands_extra import (  # noqa: E402, F401
     get_desktop_dir, create_desktop_shortcut, cmd_desktop, cmd_bin,
     cmd_settings, cmd_export, cmd_gpu_temp, cmd_free_games,
 )

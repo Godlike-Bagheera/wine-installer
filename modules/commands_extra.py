@@ -3,22 +3,21 @@
 Ярлыки на рабочем столе, экспорт конфигурации, температура GPU и каталог
 бесплатных игр. commands.py реэкспортирует эти имена — публичный API не менялся.
 """
+import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
 from modules import debug, state
-from modules.colors import ok, info, warn, err, hint, CYAN, BOLD, DIM, RESET
+from modules.colors import ok, info, warn, err, hint, CYAN, BOLD, DIM, YELLOW, RESET
 from modules.config import (
     WINE_DIR, BIN_DIR, DESKTOP_DIRS, SHORTCUTS_DIR, DXVK_OVERRIDES,
-    WINE_PREFIX, LOG_DIR, DEBUG_LOG, HISTORY_FILE, SETTINGS_FILE,
-    FREE_GAMES, CURRENT_VERSION,
+    WINE_PREFIX, WINE_BIN, DEBUG_LOG, HISTORY_FILE, SETTINGS_FILE,
+    FREE_GAMES,
 )
 from modules.gamemode import gamemode_available
 from modules.java import find_java
 from modules.launcher import find_exe
 from modules.settings import load_settings, save_settings, apply_settings
-from modules.download import download_file
 
 
 def get_desktop_dir():
@@ -150,6 +149,7 @@ def cmd_settings(args=""):
             ok(f"{names[bool_keys[low]]} {'вкл' if value_on else 'выкл'}")
             return
         if low in ("debug", "дебаг") and (value_on or value_off):
+            from modules.commands import cmd_debug  # лениво: см. реэкспорт в commands.py
             cmd_debug("on" if value_on else "off")
             return
     warn("settings <ключ> on|off — см. `settings` (список ключей)")
@@ -204,7 +204,6 @@ def cmd_export(args=""):
 
 def cmd_gpu_temp():
     """Показать температуру GPU (nvidia-smi или sensors)."""
-    import shutil
     nvidia = shutil.which("nvidia-smi")
     if nvidia:
         try:
@@ -240,9 +239,13 @@ def cmd_gpu_temp():
 
 
 def _cmd_download_local(url):
-    """Скачать и распаковать (упрощённая версия cmd_download без интерактива)."""
+    """Скачать и распаковать архив по URL, затем запустить найденную игру.
+
+    Тонкая обёртка над commands.cmd_download (ленивый импорт — иначе
+    циклическая инициализация: commands реэкспортирует этот модуль).
+    """
     from modules.commands import cmd_download
-    _cmd_download_local(url)
+    cmd_download(url)
 
 
 def cmd_free_games():
