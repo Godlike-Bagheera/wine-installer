@@ -152,8 +152,12 @@ def find_minecraft_dirs(limit=12):
         WINE_PREFIX / "drive_c" / "users" / "stud" / ".minecraft",
         WINE_PREFIX / "drive_c" / "users" / "stud" / "AppData" / "Roaming" / ".minecraft",
         WINE_PREFIX / "drive_c" / "users" / "stud" / "AppData" / "Roaming" / ".tlauncher" / "legacy" / "Minecraft" / "game",
-        Path("/root/.minecraft"),
     ]
+    # "/root/.minecraft" — эвристика для запуска от root. При WI_FAKE_HOME=1
+    # (тесты с изолированным HOME) её использовать нельзя: иначе тесты под
+    # root начинают трогать реальный ~/.minecraft настоящего пользователя.
+    if os.environ.get("WI_FAKE_HOME") != "1":
+        direct.append(Path("/root/.minecraft"))
     for d in direct:
         add(d)
 
