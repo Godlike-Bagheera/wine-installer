@@ -26,13 +26,19 @@ from modules.prefix import choose_minecraft_dir
 
 
 # Единый SSL-контекст проекта — в modules/net.py (раньше копировался 6 раз).
-from modules.net import ssl_ctx as _ssl_ctx
+
+
+def _http_get(url, timeout=30, headers=None):
+    """GET с фолбеком строгой проверки сертификатов (см. net.ssl_ctx)."""
+    from modules.download import open_checked
+    req = urllib.request.Request(url, headers=headers or {})
+    return open_checked(req, timeout)
 
 
 def _http_get_json(url, timeout=30):
     """GET url -> распарсенный JSON (SSL-контекст как в остальном проекте)."""
-    req = urllib.request.Request(url, headers={"User-Agent": "wine-installer/2.5"})
-    with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as r:
+    with _http_get(url, timeout=timeout,
+                   headers={"User-Agent": "wine-installer/2.5"}) as r:
         return json.loads(r.read().decode("utf-8", errors="replace"))
 
 
@@ -55,8 +61,7 @@ def _github_get_json(url, timeout=30):
     if entry.get("etag"):
         headers["If-None-Match"] = entry["etag"]
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=timeout) as r:
+        with _http_get(url, timeout=timeout, headers=headers) as r:
             data = json.loads(r.read().decode("utf-8", errors="replace"))
         etag = r.headers.get("ETag", "")
         if etag:
@@ -1083,8 +1088,8 @@ def _optifine_versions_from_html(html):
 def setup_optifine():
     info(f"{BOLD}Скачивание OptiFine{RESET}")
     try:
-        req = urllib.request.Request(OPTIFINE_PAGE, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, context=_ssl_ctx(), timeout=30) as r:
+        with _http_get(OPTIFINE_PAGE, timeout=30,
+                       headers={"User-Agent": "Mozilla/5.0"}) as r:
             html = r.read().decode("utf-8", errors="replace")
     except Exception as e:
         debug.dbg_exc(e, "setup_optifine/page")
